@@ -4,3 +4,6 @@ __pycache__/
 *.pyo
 *.log
 .vscode/
+*.txt
+main_before_threading.py
+qt_test.py
