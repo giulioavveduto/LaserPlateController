@@ -17,12 +17,14 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QVBoxLayout,
     QWidget,
+    QDialog,
+    QDialogButtonBox,     
 )
 
 from stage_worker import StageWorker
 from plates.plate_geometry import PlateGeometry
 from plates.well_plate_widget import WellPlateWidget
-
+from calibration.calibration_manager import CalibrationManager
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -38,6 +40,10 @@ class MainWindow(QMainWindow):
 
         self.stage_connected = False
         self.stage_busy = False
+        self.current_x_mm: float | None = None
+        self.current_y_mm: float | None = None
+
+        self.calibration_manager = CalibrationManager()
 
         self.setWindowTitle("Laser Plate Controller")
         self.resize(1100, 750)
@@ -294,6 +300,7 @@ class MainWindow(QMainWindow):
 
         self.calibrate_button = QPushButton("Calibrate current position as A1")
         self.calibrate_button.setEnabled(False)
+        self.calibrate_button.clicked.connect(self.open_a1_calibration_dialog)
         layout.addWidget(self.calibrate_button)
 
         self.current_plate_widget = None
@@ -333,6 +340,7 @@ class MainWindow(QMainWindow):
         )
 
         self.plate_map_layout.addWidget(self.current_plate_widget)
+        self.update_calibration_status()
 
         self.statusBar().showMessage(f"Loaded {plate_name}")
 
@@ -363,6 +371,110 @@ class MainWindow(QMainWindow):
         selected_wells: list[str],
     ) -> None:
         self.statusBar().showMessage(f"{len(selected_wells)} well(s) selected")
+
+    def update_calibration_status(self) -> None:
+        if self.current_plate_widget is None:
+            self.calibration_status_label.setText(
+                "A1 calibration: not defined"
+            )
+            return
+
+        plate_name = self.current_plate_widget.plate.name
+        a1_position = self.calibration_manager.get_a1(plate_name)
+
+        if a1_position is None:
+            self.calibration_status_label.setText(
+                "A1 calibration: not defined"
+            )
+            self.calibration_status_label.setStyleSheet(
+                "font-weight: bold; color: #a12626;"
+            )
+            return
+
+        a1_x_mm, a1_y_mm = a1_position
+
+        self.calibration_status_label.setText(
+            f"A1 calibration: X={a1_x_mm:.3f} mm, "
+            f"Y={a1_y_mm:.3f} mm"
+        )
+        self.calibration_status_label.setStyleSheet(
+            "font-weight: bold; color: #16803a;"
+        )
+
+    def open_a1_calibration_dialog(self) -> None:
+        if not self.stage_connected:
+            QMessageBox.warning(
+                self,
+                "Stage not connected",
+                "Connect the stage or simulator before calibrating A1.",
+            )
+            return
+
+        if self.current_plate_widget is None:
+            QMessageBox.warning(
+                self,
+                "No plate selected",
+                "Select a plate before calibrating A1.",
+            )
+            return
+
+        if self.current_x_mm is None or self.current_y_mm is None:
+            QMessageBox.warning(
+                self,
+                "Position unavailable",
+                "The current stage position is unavailable.",
+            )
+            return
+
+        plate_name = self.current_plate_widget.plate.name
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("A1 calibration")
+        dialog.setModal(True)
+
+        layout = QVBoxLayout(dialog)
+
+        instruction_label = QLabel(
+            "Confirm that the laser fibre is centred over well A1.\n\n"
+            f"Plate: {plate_name}\n"
+            f"Current X: {self.current_x_mm:.3f} mm\n"
+            f"Current Y: {self.current_y_mm:.3f} mm\n\n"
+            "Store this position as A1?"
+        )
+        layout.addWidget(instruction_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            self.calibration_manager.set_a1(
+                plate_name,
+                self.current_x_mm,
+                self.current_y_mm,
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Calibration error",
+                str(exc),
+            )
+            return
+
+        self.update_calibration_status()
+
+        QMessageBox.information(
+            self,
+            "Calibration saved",
+            f"A1 calibration saved for {plate_name}.",
+        )
 
     def create_future_devices_section(self) -> QGroupBox:
         group = QGroupBox("Laser and incubator — future modules")
@@ -495,7 +607,12 @@ class MainWindow(QMainWindow):
         x_mm: float,
         y_mm: float,
     ) -> None:
-        self.position_label.setText(f"Position\nX: {x_mm:.3f} mm\nY: {y_mm:.3f} mm")
+        self.current_x_mm = x_mm
+        self.current_y_mm = y_mm
+
+        self.position_label.setText(
+            f"Position\nX: {x_mm:.3f} mm\nY: {y_mm:.3f} mm"
+        )
 
     def on_movement_started(
         self,
