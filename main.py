@@ -26,6 +26,7 @@ from plates.well_plate_widget import WellPlateWidget
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
+    request_stage_mode = Signal(str)
     request_disconnect_stage = Signal()
     request_position = Signal()
     request_move_stage = Signal(float, float)
@@ -93,6 +94,7 @@ class MainWindow(QMainWindow):
 
         self.stage_thread.started.connect(self.stage_worker.initialize)
 
+        self.request_stage_mode.connect(self.stage_worker.set_stage_mode)
         self.request_connect_stage.connect(self.stage_worker.connect_stage)
         self.request_disconnect_stage.connect(self.stage_worker.disconnect_stage)
         self.request_position.connect(self.stage_worker.read_position)
@@ -130,13 +132,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.incubator_status_label)
         layout.addStretch()
 
+        layout.addWidget(QLabel("Stage mode:"))
+
+        self.stage_mode_combo = QComboBox()
+        self.stage_mode_combo.addItems(
+            [
+                "Simulator",
+                "Real DMSTC",
+            ]
+        )
+        self.stage_mode_combo.setCurrentText("Simulator")
+        self.stage_mode_combo.currentTextChanged.connect(
+            self.request_stage_mode.emit
+        )
+        layout.addWidget(self.stage_mode_combo)
+
         self.connect_button = QPushButton("Connect stage")
-        self.connect_button.clicked.connect(self.request_connect_stage.emit)
+        self.connect_button.clicked.connect(
+            self.request_connect_stage.emit
+        )
         layout.addWidget(self.connect_button)
 
         self.disconnect_button = QPushButton("Disconnect")
         self.disconnect_button.setEnabled(False)
-        self.disconnect_button.clicked.connect(self.request_disconnect_stage.emit)
+        self.disconnect_button.clicked.connect(
+            self.request_disconnect_stage.emit
+        )
         layout.addWidget(self.disconnect_button)
 
         return group
@@ -426,19 +447,29 @@ class MainWindow(QMainWindow):
         self.stage_connected = True
         self.stage_busy = False
 
+        mode = self.stage_mode_combo.currentText()
+
         self.set_device_status(
             self.stage_status_label,
-            "Stage: connected",
+            f"Stage: {mode} connected",
             True,
         )
 
         self.connect_button.setEnabled(False)
+        self.stage_mode_combo.setEnabled(False)
         self.disconnect_button.setEnabled(True)
         self.set_stage_controls_enabled(True)
         self.calibrate_button.setEnabled(True)
 
         self.update_position_display(x_mm, y_mm)
-        self.statusBar().showMessage("Stage connected on /dev/ttyS0")
+        if mode == "Simulator":
+            self.statusBar().showMessage(
+                "Simulated stage connected — no physical hardware is active"
+            )
+        else:
+            self.statusBar().showMessage(
+                "Real DMSTC stage connected"
+            )
 
     def on_stage_disconnected(self) -> None:
         self.stage_connected = False
@@ -451,6 +482,7 @@ class MainWindow(QMainWindow):
         )
 
         self.connect_button.setEnabled(True)
+        self.stage_mode_combo.setEnabled(True)
         self.disconnect_button.setEnabled(False)
         self.set_stage_controls_enabled(False)
         self.calibrate_button.setEnabled(False)
