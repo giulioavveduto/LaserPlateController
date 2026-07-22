@@ -1,0 +1,562 @@
+from __future__ import annotations
+
+import sys
+
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QDoubleSpinBox,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from stage_worker import StageWorker
+from plates.plate_geometry import PlateGeometry
+from plates.well_plate_widget import WellPlateWidget
+
+
+class MainWindow(QMainWindow):
+    request_connect_stage = Signal()
+    request_disconnect_stage = Signal()
+    request_position = Signal()
+    request_move_stage = Signal(float, float)
+    request_home_stage = Signal()
+    request_absolute_move = Signal(float, float)
+
+    def __init__(self) -> None:
+        super().__init__()
+
+        self.stage_connected = False
+        self.stage_busy = False
+
+        self.setWindowTitle("Laser Plate Controller")
+        self.resize(1100, 750)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+
+        main_layout = QVBoxLayout(central_widget)
+
+        title = QLabel("Laser Plate Controller")
+        title.setStyleSheet("font-size: 26px; font-weight: bold; padding: 10px;")
+        main_layout.addWidget(title)
+
+        main_layout.addWidget(self.create_device_status_section())
+
+        body_layout = QHBoxLayout()
+        body_layout.addWidget(self.create_stage_section(), stretch=1)
+        body_layout.addWidget(self.create_plate_section(), stretch=2)
+        main_layout.addLayout(body_layout)
+
+        main_layout.addWidget(self.create_future_devices_section())
+
+        self.start_button = QPushButton("START EXPERIMENT")
+        self.start_button.setEnabled(False)
+        self.start_button.setMinimumHeight(55)
+        self.start_button.setStyleSheet("font-size: 18px; font-weight: bold;")
+        main_layout.addWidget(self.start_button)
+
+        self.setStatusBar(QStatusBar())
+        self.statusBar().showMessage("Application ready")
+
+        self.set_device_status(
+            self.stage_status_label,
+            "Stage: disconnected",
+            False,
+        )
+        self.set_device_status(
+            self.laser_status_label,
+            "Laser: not configured",
+            False,
+        )
+        self.set_device_status(
+            self.incubator_status_label,
+            "Incubator: not configured",
+            False,
+        )
+
+        self.create_stage_thread()
+
+    def create_stage_thread(self) -> None:
+        self.stage_thread = QThread(self)
+        self.stage_worker = StageWorker()
+        self.stage_worker.moveToThread(self.stage_thread)
+
+        self.stage_thread.started.connect(self.stage_worker.initialize)
+
+        self.request_connect_stage.connect(self.stage_worker.connect_stage)
+        self.request_disconnect_stage.connect(self.stage_worker.disconnect_stage)
+        self.request_position.connect(self.stage_worker.read_position)
+        self.request_move_stage.connect(self.stage_worker.move_relative)
+        self.request_home_stage.connect(self.stage_worker.home_stage)
+
+        self.stage_worker.connected.connect(self.on_stage_connected)
+        self.stage_worker.disconnected.connect(self.on_stage_disconnected)
+        self.stage_worker.position_updated.connect(self.update_position_display)
+
+        self.stage_worker.movement_started.connect(self.on_movement_started)
+        self.stage_worker.movement_finished.connect(self.on_movement_finished)
+
+        self.stage_worker.homing_started.connect(self.on_homing_started)
+        self.stage_worker.homing_finished.connect(self.on_homing_finished)
+
+        self.request_absolute_move.connect(self.stage_worker.move_absolute)
+        self.stage_worker.absolute_movement_started.connect(
+            self.on_absolute_movement_started
+        )
+        self.stage_worker.error_occurred.connect(self.show_stage_error)
+
+        self.stage_thread.start()
+
+    def create_device_status_section(self) -> QGroupBox:
+        group = QGroupBox("Device status")
+        layout = QHBoxLayout(group)
+
+        self.stage_status_label = QLabel()
+        self.laser_status_label = QLabel()
+        self.incubator_status_label = QLabel()
+
+        layout.addWidget(self.stage_status_label)
+        layout.addWidget(self.laser_status_label)
+        layout.addWidget(self.incubator_status_label)
+        layout.addStretch()
+
+        self.connect_button = QPushButton("Connect stage")
+        self.connect_button.clicked.connect(self.request_connect_stage.emit)
+        layout.addWidget(self.connect_button)
+
+        self.disconnect_button = QPushButton("Disconnect")
+        self.disconnect_button.setEnabled(False)
+        self.disconnect_button.clicked.connect(self.request_disconnect_stage.emit)
+        layout.addWidget(self.disconnect_button)
+
+        return group
+
+    def create_stage_section(self) -> QGroupBox:
+        group = QGroupBox("Stage control")
+        layout = QVBoxLayout(group)
+
+        self.position_label = QLabel("Position\nX: undefined\nY: undefined")
+        self.position_label.setStyleSheet("font-size: 18px; padding: 10px;")
+        layout.addWidget(self.position_label)
+
+        step_layout = QHBoxLayout()
+        step_layout.addWidget(QLabel("Movement step:"))
+
+        self.step_spinbox = QDoubleSpinBox()
+        self.step_spinbox.setRange(0.001, 100.0)
+        self.step_spinbox.setDecimals(3)
+        self.step_spinbox.setValue(1.0)
+        self.step_spinbox.setSuffix(" mm")
+        step_layout.addWidget(self.step_spinbox)
+
+        layout.addLayout(step_layout)
+
+        movement_layout = QGridLayout()
+
+        self.up_button = QPushButton("↑  +Y")
+        self.left_button = QPushButton("←  −X")
+        self.right_button = QPushButton("+X  →")
+        self.down_button = QPushButton("↓  −Y")
+
+        self.up_button.clicked.connect(
+            lambda: self.request_movement(
+                0.0,
+                self.step_spinbox.value(),
+            )
+        )
+        self.down_button.clicked.connect(
+            lambda: self.request_movement(
+                0.0,
+                -self.step_spinbox.value(),
+            )
+        )
+        self.left_button.clicked.connect(
+            lambda: self.request_movement(
+                -self.step_spinbox.value(),
+                0.0,
+            )
+        )
+        self.right_button.clicked.connect(
+            lambda: self.request_movement(
+                self.step_spinbox.value(),
+                0.0,
+            )
+        )
+
+        movement_layout.addWidget(self.up_button, 0, 1)
+        movement_layout.addWidget(self.left_button, 1, 0)
+        movement_layout.addWidget(self.right_button, 1, 2)
+        movement_layout.addWidget(self.down_button, 2, 1)
+
+        layout.addLayout(movement_layout)
+
+        absolute_group = QGroupBox("Absolute position")
+        absolute_layout = QGridLayout(absolute_group)
+
+        absolute_layout.addWidget(QLabel("X:"), 0, 0)
+
+        self.absolute_x_spinbox = QDoubleSpinBox()
+        self.absolute_x_spinbox.setRange(0.0, 200.0)
+        self.absolute_x_spinbox.setDecimals(3)
+        self.absolute_x_spinbox.setSuffix(" mm")
+        absolute_layout.addWidget(self.absolute_x_spinbox, 0, 1)
+
+        absolute_layout.addWidget(QLabel("Y:"), 1, 0)
+
+        self.absolute_y_spinbox = QDoubleSpinBox()
+        self.absolute_y_spinbox.setRange(0.0, 200.0)
+        self.absolute_y_spinbox.setDecimals(3)
+        self.absolute_y_spinbox.setSuffix(" mm")
+        absolute_layout.addWidget(self.absolute_y_spinbox, 1, 1)
+
+        self.absolute_go_button = QPushButton("GO TO POSITION")
+        self.absolute_go_button.clicked.connect(self.request_absolute_position)
+        absolute_layout.addWidget(
+            self.absolute_go_button,
+            2,
+            0,
+            1,
+            2,
+        )
+
+        layout.addWidget(absolute_group)
+
+        self.home_button = QPushButton("Home stage")
+        self.home_button.clicked.connect(self.confirm_home_stage)
+        layout.addWidget(self.home_button)
+
+        self.set_stage_controls_enabled(False)
+
+        return group
+
+    def create_plate_section(self) -> QGroupBox:
+        group = QGroupBox("Plate configuration")
+        layout = QVBoxLayout(group)
+
+        plate_type_layout = QHBoxLayout()
+        plate_type_layout.addWidget(QLabel("Plate type:"))
+
+        self.plate_combo = QComboBox()
+        self.plate_combo.addItems(
+            [
+                "96-well plate",
+                "48-well plate",
+                "24-well plate",
+                "12-well plate",
+                "6-well plate",
+                "Add new plate…",
+            ]
+        )
+        self.plate_combo.currentTextChanged.connect(self.change_plate_type)
+
+        plate_type_layout.addWidget(self.plate_combo)
+        layout.addLayout(plate_type_layout)
+
+        self.plate_map_container = QWidget()
+        self.plate_map_layout = QVBoxLayout(self.plate_map_container)
+        self.plate_map_layout.setContentsMargins(0, 0, 0, 0)
+
+        layout.addWidget(self.plate_map_container)
+
+        self.calibration_status_label = QLabel("A1 calibration: not defined")
+        layout.addWidget(self.calibration_status_label)
+
+        self.calibrate_button = QPushButton("Calibrate current position as A1")
+        self.calibrate_button.setEnabled(False)
+        layout.addWidget(self.calibrate_button)
+
+        self.current_plate_widget = None
+        self.load_plate_widget("96-well plate")
+
+        return group
+
+    def clear_plate_widget(self) -> None:
+        while self.plate_map_layout.count():
+            item = self.plate_map_layout.takeAt(0)
+            widget = item.widget()
+
+            if widget is not None:
+                widget.deleteLater()
+
+        self.current_plate_widget = None
+
+    def load_plate_widget(self, plate_name: str) -> None:
+        if plate_name == "Add new plate…":
+            return
+
+        try:
+            plate = PlateGeometry(plate_name)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Plate loading error",
+                str(exc),
+            )
+            return
+
+        self.clear_plate_widget()
+
+        self.current_plate_widget = WellPlateWidget(plate)
+        self.current_plate_widget.selection_changed.connect(
+            self.on_well_selection_changed
+        )
+
+        self.plate_map_layout.addWidget(self.current_plate_widget)
+
+        self.statusBar().showMessage(f"Loaded {plate_name}")
+
+    def change_plate_type(self, plate_name: str) -> None:
+        if plate_name == "Add new plate…":
+            previous_plate_name = (
+                self.current_plate_widget.plate.name
+                if self.current_plate_widget is not None
+                else "96-well plate"
+            )
+
+            QMessageBox.information(
+                self,
+                "Add plate",
+                "The custom plate editor will be added in a later version.",
+            )
+
+            self.plate_combo.blockSignals(True)
+            self.plate_combo.setCurrentText(previous_plate_name)
+            self.plate_combo.blockSignals(False)
+
+            return
+
+        self.load_plate_widget(plate_name)
+
+    def on_well_selection_changed(
+        self,
+        selected_wells: list[str],
+    ) -> None:
+        self.statusBar().showMessage(f"{len(selected_wells)} well(s) selected")
+
+    def create_future_devices_section(self) -> QGroupBox:
+        group = QGroupBox("Laser and incubator — future modules")
+        layout = QHBoxLayout(group)
+
+        laser_box = QGroupBox("Laser")
+        laser_layout = QVBoxLayout(laser_box)
+        laser_layout.addWidget(QLabel("Emission control: unavailable"))
+        laser_layout.addWidget(QLabel("Power control: unavailable"))
+        laser_layout.addWidget(QLabel("Preheat: unavailable"))
+
+        incubator_box = QGroupBox("Incubator")
+        incubator_layout = QVBoxLayout(incubator_box)
+        incubator_layout.addWidget(QLabel("Temperature: unavailable"))
+        incubator_layout.addWidget(QLabel("Humidity: unavailable"))
+        incubator_layout.addWidget(QLabel("CO₂: unavailable"))
+
+        layout.addWidget(laser_box)
+        layout.addWidget(incubator_box)
+
+        return group
+
+    def set_device_status(
+        self,
+        label: QLabel,
+        text: str,
+        connected: bool,
+    ) -> None:
+        colour = "#16803a" if connected else "#a12626"
+        symbol = "●" if connected else "○"
+
+        label.setText(f"{symbol} {text}")
+        label.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {colour};")
+
+    def set_stage_controls_enabled(self, enabled: bool) -> None:
+        controls = (
+            self.up_button,
+            self.down_button,
+            self.left_button,
+            self.right_button,
+            self.home_button,
+            self.step_spinbox,
+            self.absolute_x_spinbox,
+            self.absolute_y_spinbox,
+            self.absolute_go_button,
+        )
+
+        for control in controls:
+            control.setEnabled(enabled)
+
+    def request_movement(
+        self,
+        dx_mm: float,
+        dy_mm: float,
+    ) -> None:
+        if not self.stage_connected or self.stage_busy:
+            return
+
+        self.request_move_stage.emit(dx_mm, dy_mm)
+
+    def confirm_home_stage(self) -> None:
+        if not self.stage_connected or self.stage_busy:
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            "Confirm stage homing",
+            "The stage will move to its reference corner.\n\n"
+            "Ensure the complete travel path is clear before continuing.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+
+        if answer == QMessageBox.StandardButton.Ok:
+            self.request_home_stage.emit()
+
+    def on_stage_connected(
+        self,
+        x_mm: float,
+        y_mm: float,
+    ) -> None:
+        self.stage_connected = True
+        self.stage_busy = False
+
+        self.set_device_status(
+            self.stage_status_label,
+            "Stage: connected",
+            True,
+        )
+
+        self.connect_button.setEnabled(False)
+        self.disconnect_button.setEnabled(True)
+        self.set_stage_controls_enabled(True)
+        self.calibrate_button.setEnabled(True)
+
+        self.update_position_display(x_mm, y_mm)
+        self.statusBar().showMessage("Stage connected on /dev/ttyS0")
+
+    def on_stage_disconnected(self) -> None:
+        self.stage_connected = False
+        self.stage_busy = False
+
+        self.set_device_status(
+            self.stage_status_label,
+            "Stage: disconnected",
+            False,
+        )
+
+        self.connect_button.setEnabled(True)
+        self.disconnect_button.setEnabled(False)
+        self.set_stage_controls_enabled(False)
+        self.calibrate_button.setEnabled(False)
+
+        self.position_label.setText("Position\nX: undefined\nY: undefined")
+        self.statusBar().showMessage("Stage disconnected")
+
+    def update_position_display(
+        self,
+        x_mm: float,
+        y_mm: float,
+    ) -> None:
+        self.position_label.setText(f"Position\nX: {x_mm:.3f} mm\nY: {y_mm:.3f} mm")
+
+    def on_movement_started(
+        self,
+        dx_mm: float,
+        dy_mm: float,
+    ) -> None:
+        self.stage_busy = True
+        self.set_stage_controls_enabled(False)
+
+        self.statusBar().showMessage(
+            f"Moving stage: ΔX={dx_mm:.3f} mm, " f"ΔY={dy_mm:.3f} mm"
+        )
+
+    def on_movement_finished(
+        self,
+        x_mm: float,
+        y_mm: float,
+    ) -> None:
+        self.stage_busy = False
+        self.set_stage_controls_enabled(True)
+
+        self.update_position_display(x_mm, y_mm)
+        self.statusBar().showMessage("Movement complete")
+
+    def on_homing_started(self) -> None:
+        self.stage_busy = True
+        self.set_stage_controls_enabled(False)
+        self.statusBar().showMessage("Homing stage...")
+
+    def on_homing_finished(
+        self,
+        x_mm: float,
+        y_mm: float,
+    ) -> None:
+        self.stage_busy = False
+        self.set_stage_controls_enabled(True)
+
+        self.update_position_display(x_mm, y_mm)
+        self.statusBar().showMessage("Homing complete")
+
+    def show_stage_error(self, message: str) -> None:
+        self.stage_busy = False
+
+        if self.stage_connected:
+            self.set_stage_controls_enabled(True)
+
+        QMessageBox.critical(
+            self,
+            "Stage error",
+            message,
+        )
+
+    def request_absolute_position(self) -> None:
+        if not self.stage_connected or self.stage_busy:
+            return
+
+        x_mm = self.absolute_x_spinbox.value()
+        y_mm = self.absolute_y_spinbox.value()
+
+        self.request_absolute_move.emit(x_mm, y_mm)
+
+    def on_absolute_movement_started(
+        self,
+        x_mm: float,
+        y_mm: float,
+    ) -> None:
+        self.stage_busy = True
+        self.set_stage_controls_enabled(False)
+
+        self.statusBar().showMessage(
+            f"Moving to absolute position: " f"X={x_mm:.3f} mm, Y={y_mm:.3f} mm"
+        )
+
+    def closeEvent(self, event) -> None:
+        self.request_disconnect_stage.emit()
+
+        self.stage_thread.quit()
+
+        if not self.stage_thread.wait(3000):
+            self.stage_thread.terminate()
+            self.stage_thread.wait()
+
+        event.accept()
+
+
+def main() -> None:
+    app = QApplication(sys.argv)
+
+    window = MainWindow()
+    window.show()
+
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
