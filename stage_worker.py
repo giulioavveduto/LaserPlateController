@@ -5,7 +5,8 @@ from typing import Optional
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from dmstc_stage import DMSTCStage
-
+from simulated_stage import SimulatedStage
+from stage_modes import StageMode
 
 class StageWorker(QObject):
     connected = Signal(float, float)
@@ -25,9 +26,10 @@ class StageWorker(QObject):
     def __init__(self) -> None:
         super().__init__()
 
-        self.stage: Optional[DMSTCStage] = None
+        self.stage: Optional[DMSTCStage | SimulatedStage] = None
         self.position_timer: Optional[QTimer] = None
         self.operation_in_progress = False
+        self.stage_mode = StageMode.SIMULATOR
 
     @Slot()
     def initialize(self) -> None:
@@ -36,13 +38,32 @@ class StageWorker(QObject):
         self.position_timer.setInterval(1000)
         self.position_timer.timeout.connect(self.read_position)
 
+    @Slot(str)
+    def set_stage_mode(self, mode_value: str) -> None:
+        if self.stage is not None:
+            self.error_occurred.emit(
+                "Disconnect the current stage before changing stage mode."
+            )
+            return
+
+        try:
+            self.stage_mode = StageMode(mode_value)
+        except ValueError:
+            self.error_occurred.emit(
+                f"Unknown stage mode: {mode_value}"
+            )
+
     @Slot()
     def connect_stage(self) -> None:
         if self.stage is not None:
             return
 
         try:
-            self.stage = DMSTCStage()
+            if self.stage_mode is StageMode.SIMULATOR:
+                self.stage = SimulatedStage()
+            else:
+                self.stage = DMSTCStage()
+
             x_mm, y_mm = self.stage.get_position_mm()
 
             if self.position_timer is not None:
@@ -57,7 +78,7 @@ class StageWorker(QObject):
                 "Check that:\n"
                 "• the Leica DMSTC controller is powered on;\n"
                 "• the cable is connected to the RS-232 port;\n"
-                "• no other program is using /dev/ttyS0.\n\n"
+                "• no other program is using the serial port.\n\n"
                 f"Technical information:\n{exc}"
             )
 
