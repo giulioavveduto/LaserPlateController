@@ -25,3 +25,35 @@ class ExperimentProtocol:
             and self.selected_well_count > 0
             and self.common_exposure_time_s > 0
         )
+
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "format_version": 1,
+            "name": self.name,
+            "plate_type": self.plate_type,
+            "selected_wells": list(self.selected_wells),
+            "common_exposure_time_s": self.common_exposure_time_s,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, object],
+    ) -> "ExperimentProtocol":
+        format_version = data.get("format_version")
+
+        if format_version != 1:
+            raise ValueError(
+                f"Unsupported protocol format version: {format_version}"
+            )
+
+        return cls(
+            name=str(data.get("name", "Untitled protocol")),
+            plate_type=str(data.get("plate_type", "")),
+            selected_wells=list(data.get("selected_wells", [])),
+            common_exposure_time_s=float(
+                data.get("common_exposure_time_s", 0.0)
+            ),
+        )
+

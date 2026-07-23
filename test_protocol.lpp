@@ -1,0 +1,11 @@
+{
+    "format_version": 1,
+    "name": "My first protocol",
+    "plate_type": "96-well plate",
+    "selected_wells": [
+        "A1",
+        "A2",
+        "B3"
+    ],
+    "common_exposure_time_s": 31.0
+}

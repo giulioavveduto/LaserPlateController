@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QMetaObject, QThread, Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -18,7 +20,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QDialog,
-    QDialogButtonBox,     
+    QDialogButtonBox,
+    QFileDialog,     
 )
 
 from stage.stage_worker import StageWorker
@@ -27,6 +30,7 @@ from plates.well_plate_widget import WellPlateWidget
 from calibration.calibration_manager import CalibrationManager
 from experiment.experiment_protocol import ExperimentProtocol
 from experiment.experiment_designer_widget import ExperimentDesignerWidget
+from experiment.protocol_io import save_protocol
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -49,7 +53,7 @@ class MainWindow(QMainWindow):
         self.experiment_protocol = ExperimentProtocol(
             plate_type="96-well plate"
         )
-
+        self.current_protocol_path: Path | None = None
         self.setWindowTitle("Laser Plate Controller")
         self.resize(1100, 750)
 
@@ -99,8 +103,66 @@ class MainWindow(QMainWindow):
             "Incubator: not configured",
             False,
         )
+        self.create_menu_bar()
 
         self.create_stage_thread()
+        
+
+    def create_menu_bar(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
+
+        self.save_action = QAction("Save", self)
+        self.save_as_action = QAction("Save As...", self)
+
+        self.save_action.triggered.connect(self.on_save_requested)
+        self.save_as_action.triggered.connect(
+            self.on_save_as_requested
+        )
+
+        file_menu.addAction(self.save_action)
+        file_menu.addAction(self.save_as_action)
+
+
+    def on_save_requested(self) -> None:
+        print("Save requested")
+
+
+    def on_save_as_requested(self) -> None:
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save protocol",
+            "",
+            "Laser Plate Protocol (*.lpp)",
+        )
+
+        if not file_path:
+            return
+
+        path = Path(file_path)
+
+        if path.suffix.lower() != ".lpp":
+            path = path.with_suffix(".lpp")
+
+        try:
+            save_protocol(
+                self.experiment_protocol,
+                path,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Protocol save error",
+                str(exc),
+            )
+            return
+
+        self.current_protocol_path = path
+        self.update_window_title()
+
+        self.statusBar().showMessage(
+            f"Protocol saved: {path.name}",
+            5000,
+        )
 
     def create_stage_thread(self) -> None:
         self.stage_thread = QThread(self)
@@ -274,6 +336,17 @@ class MainWindow(QMainWindow):
         self.set_stage_controls_enabled(False)
 
         return group
+
+
+    def update_window_title(self) -> None:
+        if self.current_protocol_path is None:
+            protocol_name = "Untitled"
+        else:
+            protocol_name = self.current_protocol_path.name
+
+        self.setWindowTitle(
+            f"Laser Plate Controller — {protocol_name}"
+        )
 
     def create_plate_section(self) -> QGroupBox:
         group = QGroupBox("Plate configuration")
