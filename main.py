@@ -25,6 +25,8 @@ from stage_worker import StageWorker
 from plates.plate_geometry import PlateGeometry
 from plates.well_plate_widget import WellPlateWidget
 from calibration.calibration_manager import CalibrationManager
+from experiment_protocol import ExperimentProtocol
+from experiment_designer_widget import ExperimentDesignerWidget
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -44,6 +46,9 @@ class MainWindow(QMainWindow):
         self.current_y_mm: float | None = None
 
         self.calibration_manager = CalibrationManager()
+        self.experiment_protocol = ExperimentProtocol(
+            plate_type="96-well plate"
+        )
 
         self.setWindowTitle("Laser Plate Controller")
         self.resize(1100, 750)
@@ -63,6 +68,10 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(self.create_stage_section(), stretch=1)
         body_layout.addWidget(self.create_plate_section(), stretch=2)
         main_layout.addLayout(body_layout)
+        self.experiment_designer = ExperimentDesignerWidget(
+            self.experiment_protocol
+        )
+        main_layout.addWidget(self.experiment_designer)
 
         main_layout.addWidget(self.create_future_devices_section())
 
@@ -335,11 +344,17 @@ class MainWindow(QMainWindow):
         self.clear_plate_widget()
 
         self.current_plate_widget = WellPlateWidget(plate)
+        self.experiment_protocol.plate_type = plate.name
+
         self.current_plate_widget.selection_changed.connect(
             self.on_well_selection_changed
         )
 
         self.plate_map_layout.addWidget(self.current_plate_widget)
+
+        if hasattr(self, "experiment_designer"):
+            self.experiment_designer.refresh()
+
         self.update_calibration_status()
 
         self.statusBar().showMessage(f"Loaded {plate_name}")
@@ -370,7 +385,12 @@ class MainWindow(QMainWindow):
         self,
         selected_wells: list[str],
     ) -> None:
-        self.statusBar().showMessage(f"{len(selected_wells)} well(s) selected")
+        self.experiment_protocol.selected_wells = list(selected_wells)
+        self.experiment_designer.refresh()
+
+        self.statusBar().showMessage(
+            f"{self.experiment_protocol.selected_well_count} well(s) selected"
+        )
 
     def update_calibration_status(self) -> None:
         if self.current_plate_widget is None:
