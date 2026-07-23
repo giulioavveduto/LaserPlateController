@@ -31,6 +31,7 @@ from calibration.calibration_manager import CalibrationManager
 from experiment.experiment_protocol import ExperimentProtocol
 from experiment.experiment_designer_widget import ExperimentDesignerWidget
 from experiment.protocol_io import save_protocol
+from experiment.protocol_io import load_protocol, save_protocol
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -111,17 +112,20 @@ class MainWindow(QMainWindow):
     def create_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
 
+        self.open_action = QAction("Open...", self)
         self.save_action = QAction("Save", self)
         self.save_as_action = QAction("Save As...", self)
 
+        self.open_action.triggered.connect(self.on_open_requested)
         self.save_action.triggered.connect(self.on_save_requested)
         self.save_as_action.triggered.connect(
             self.on_save_as_requested
         )
 
+        file_menu.addAction(self.open_action)
+        file_menu.addSeparator()
         file_menu.addAction(self.save_action)
         file_menu.addAction(self.save_as_action)
-
 
     def on_save_requested(self) -> None:
         print("Save requested")
@@ -161,6 +165,74 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(
             f"Protocol saved: {path.name}",
+            5000,
+        )
+
+    def on_open_requested(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open protocol",
+            "",
+            "Laser Plate Protocol (*.lpp)",
+        )
+
+        if not file_path:
+            return
+
+        path = Path(file_path)
+
+        try:
+            loaded_protocol = load_protocol(path)
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Protocol loading error",
+                str(exc),
+            )
+            return
+
+        if loaded_protocol.plate_type not in [
+            self.plate_combo.itemText(index)
+            for index in range(self.plate_combo.count())
+        ]:
+            QMessageBox.critical(
+                self,
+                "Unknown plate type",
+                (
+                    "The protocol uses an unsupported plate type:\n"
+                    f"{loaded_protocol.plate_type}"
+                ),
+            )
+            return
+
+        self.experiment_protocol.name = loaded_protocol.name
+        self.experiment_protocol.plate_type = loaded_protocol.plate_type
+        self.experiment_protocol.selected_wells = list(
+            loaded_protocol.selected_wells
+        )
+        self.experiment_protocol.common_exposure_time_s = (
+            loaded_protocol.common_exposure_time_s
+        )
+
+        self.plate_combo.setCurrentText(
+            loaded_protocol.plate_type
+        )
+
+        if self.current_plate_widget is not None:
+            self.current_plate_widget.set_selected_wells(
+                loaded_protocol.selected_wells
+            )
+
+        self.experiment_designer.exposure_time_spinbox.setValue(
+            loaded_protocol.common_exposure_time_s
+        )
+        self.experiment_designer.refresh()
+
+        self.current_protocol_path = path
+        self.update_window_title()
+
+        self.statusBar().showMessage(
+            f"Protocol opened: {path.name}",
             5000,
         )
 
