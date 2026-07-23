@@ -587,6 +587,7 @@ class MainWindow(QMainWindow):
 
         self.current_plate_widget = WellPlateWidget(plate)
         self.experiment_protocol.plate_type = plate.name
+        self.experiment_protocol.selected_wells = []
 
         self.current_plate_widget.selection_changed.connect(
             self.on_well_selection_changed
@@ -849,6 +850,8 @@ class MainWindow(QMainWindow):
                 "Real DMSTC stage connected"
             )
 
+        self.update_navigation_button_state()
+
     def on_stage_disconnected(self) -> None:
         self.stage_connected = False
         self.stage_busy = False
@@ -867,6 +870,7 @@ class MainWindow(QMainWindow):
 
         self.position_label.setText("Position\nX: undefined\nY: undefined")
         self.statusBar().showMessage("Stage disconnected")
+        self.update_navigation_button_state()
 
     def update_position_display(
         self,
@@ -891,6 +895,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Moving stage: ΔX={dx_mm:.3f} mm, " f"ΔY={dy_mm:.3f} mm"
         )
+        self.update_navigation_button_state()
 
     def on_movement_finished(
         self,
@@ -902,11 +907,13 @@ class MainWindow(QMainWindow):
 
         self.update_position_display(x_mm, y_mm)
         self.statusBar().showMessage("Movement complete")
+        self.update_navigation_button_state()
 
     def on_homing_started(self) -> None:
         self.stage_busy = True
         self.set_stage_controls_enabled(False)
         self.statusBar().showMessage("Homing stage...")
+        self.update_navigation_button_state()
 
     def on_homing_finished(
         self,
@@ -918,6 +925,7 @@ class MainWindow(QMainWindow):
 
         self.update_position_display(x_mm, y_mm)
         self.statusBar().showMessage("Homing complete")
+        self.update_navigation_button_state()
 
     def show_stage_error(self, message: str) -> None:
         self.stage_busy = False
@@ -930,7 +938,8 @@ class MainWindow(QMainWindow):
             "Stage error",
             message,
         )
-
+        self.update_navigation_button_state()
+    
     def request_absolute_position(self) -> None:
         if not self.stage_connected or self.stage_busy:
             return
@@ -951,6 +960,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Moving to absolute position: " f"X={x_mm:.3f} mm, Y={y_mm:.3f} mm"
         )
+        self.update_navigation_button_state()
 
     def closeEvent(self, event) -> None:
         if self.stage_thread.isRunning():
