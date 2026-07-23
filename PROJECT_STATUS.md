@@ -82,6 +82,10 @@ Passed:
 - Disconnecting the controller disables Start
 - The interface remains accessible through a scrollable layout
 - Normal stage disconnection is prevented while the stage is busy
+- Start initializes the runner from a protocol snapshot
+- Experiment state, current well and remaining time display correctly
+- Start becomes disabled after runner initialization
+- State-only initialization causes no stage or laser action
 
 ## Known limitations
 
@@ -103,15 +107,11 @@ Passed:
 
 ## Next step
 
-Connect the Start button to `ExperimentRunner.start()` and display:
+## Next step
 
-- Experiment state
-- Current well
-- Remaining exposure time
+Connect the runner's `MOVING` state to automatic movement toward the current well.
 
-This first integration must remain state-only: it must not move the stage or activate the laser.
-
-After validating the GUI state transitions, connect the runner to automatic stage movement.
+After the stage reports movement completion, transition to `EXPOSING` and start the exposure countdown. Laser control remains excluded.
 
 ## Architectural decisions
 

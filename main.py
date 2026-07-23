@@ -32,7 +32,7 @@ from calibration.calibration_manager import CalibrationManager
 from experiment.experiment_protocol import ExperimentProtocol
 from experiment.experiment_designer_widget import ExperimentDesignerWidget
 from experiment.protocol_io import load_protocol, save_protocol
-from experiment.experiment_runner import ExperimentRunner
+from experiment.experiment_runner import ExperimentRunner, ExperimentState
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -100,7 +100,22 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.start_button.setMinimumHeight(55)
         self.start_button.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.start_button.clicked.connect(
+            self.start_experiment
+        )
         main_layout.addWidget(self.start_button)
+        self.experiment_runner.state_changed.connect(
+            self.on_experiment_state_changed
+        )
+        self.experiment_runner.current_well_changed.connect(
+            self.on_current_well_changed
+        )
+        self.experiment_runner.remaining_time_changed.connect(
+            self.on_remaining_time_changed
+        )
+        self.experiment_runner.error_occurred.connect(
+            self.on_experiment_error
+        )
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Application ready")
@@ -604,7 +619,61 @@ class MainWindow(QMainWindow):
         )
 
         self.start_button.setEnabled(can_start)
+    def start_experiment(self) -> None:
+        if not self.start_button.isEnabled():
+            return
 
+        try:
+            self.experiment_runner.start(
+                self.experiment_protocol
+            )
+        except (RuntimeError, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Experiment start error",
+                str(exc),
+            )
+            return
+
+        self.update_start_button_state()
+        self.statusBar().showMessage(
+            "Experiment initialized — automatic movement is not active yet"
+        )
+
+    def on_experiment_state_changed(
+        self,
+        state: ExperimentState,
+    ) -> None:
+        self.experiment_designer.experiment_state_label.setText(
+            state.name.replace("_", " ").title()
+        )
+        self.update_start_button_state()
+
+    def on_current_well_changed(self, well_name: str) -> None:
+        self.experiment_designer.current_well_label.setText(
+            well_name
+        )
+
+    def on_remaining_time_changed(
+        self,
+        remaining_time_s: float,
+    ) -> None:
+        formatted_time = (
+            self.experiment_designer.format_duration(
+                remaining_time_s
+            )
+        )
+        self.experiment_designer.remaining_time_label.setText(
+            formatted_time
+        )
+
+    def on_experiment_error(self, message: str) -> None:
+        QMessageBox.critical(
+            self,
+            "Experiment error",
+            message,
+        )
+        self.update_start_button_state()
     def clear_plate_widget(self) -> None:
         while self.plate_map_layout.count():
             item = self.plate_map_layout.takeAt(0)
@@ -921,7 +990,6 @@ class MainWindow(QMainWindow):
 
         self.position_label.setText("Position\nX: undefined\nY: undefined")
         self.statusBar().showMessage("Stage disconnected")
-        self.update_navigation_button_state()
         self.update_navigation_button_state()
         self.update_start_button_state()
 

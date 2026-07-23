@@ -45,6 +45,7 @@ class ExperimentDesignerWidget(QWidget):
         self.selected_wells_label = QLabel()
         self.estimated_duration_label = QLabel()
         self.validity_label = QLabel()
+        self.experiment_state_label = QLabel("Idle")
         self.current_well_label = QLabel("--")
         self.remaining_time_label = QLabel("--")
 
@@ -63,6 +64,10 @@ class ExperimentDesignerWidget(QWidget):
         form_layout.addRow(
             "Protocol status:",
             self.validity_label,
+        )
+        form_layout.addRow(
+            "Experiment state:",
+            self.experiment_state_label,
         )
         form_layout.addRow(
             "Current well:",
