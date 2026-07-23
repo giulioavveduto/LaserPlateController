@@ -95,7 +95,7 @@ class ExperimentDesignerWidget(QWidget):
         )
 
         if self.protocol.is_valid:
-            self.validity_label.setText("Valid")
+            self.validity_label.setText("Ready")
             self.validity_label.setStyleSheet(
                 "font-weight: bold; color: #16803a;"
             )
