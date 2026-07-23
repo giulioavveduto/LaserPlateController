@@ -4,7 +4,7 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
-from dmstc_stage import DMSTCStage
+from stage.dmstc_stage import DMSTCStage
 from simulated_stage import SimulatedStage
 from stage_modes import StageMode
 

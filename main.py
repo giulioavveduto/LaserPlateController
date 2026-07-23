@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,     
 )
 
-from stage_worker import StageWorker
+from stage.stage_worker import StageWorker
 from plates.plate_geometry import PlateGeometry
 from plates.well_plate_widget import WellPlateWidget
 from calibration.calibration_manager import CalibrationManager
