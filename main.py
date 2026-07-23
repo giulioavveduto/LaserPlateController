@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QMetaObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -687,12 +687,20 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:
-        self.request_disconnect_stage.emit()
+        if self.stage_thread.isRunning():
+            QMetaObject.invokeMethod(
+                self.stage_worker,
+                "disconnect_stage",
+                Qt.ConnectionType.BlockingQueuedConnection,
+            )
 
-        self.stage_thread.quit()
+            QMetaObject.invokeMethod(
+                self.stage_worker,
+                "deleteLater",
+                Qt.ConnectionType.QueuedConnection,
+            )
 
-        if not self.stage_thread.wait(3000):
-            self.stage_thread.terminate()
+            self.stage_thread.quit()
             self.stage_thread.wait()
 
         event.accept()
