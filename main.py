@@ -121,6 +121,11 @@ class MainWindow(QMainWindow):
         self.save_as_action.triggered.connect(
             self.on_save_as_requested
         )
+        self.open_action.setShortcut(QKeySequence.StandardKey.Open)
+        self.save_action.setShortcut(QKeySequence.StandardKey.Save)
+        self.save_as_action.setShortcut(
+            QKeySequence.StandardKey.SaveAs
+        )
 
         file_menu.addAction(self.open_action)
         file_menu.addSeparator()
@@ -128,8 +133,27 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.save_as_action)
 
     def on_save_requested(self) -> None:
-        print("Save requested")
+        if self.current_protocol_path is None:
+            self.on_save_as_requested()
+            return
 
+        try:
+            save_protocol(
+                self.experiment_protocol,
+                self.current_protocol_path,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.critical(
+                self,
+                "Protocol save error",
+                str(exc),
+            )
+            return
+
+        self.statusBar().showMessage(
+            f"Protocol saved: {self.current_protocol_path.name}",
+            5000,
+        )
 
     def on_save_as_requested(self) -> None:
         file_path, _ = QFileDialog.getSaveFileName(
@@ -427,6 +451,8 @@ class MainWindow(QMainWindow):
         plate_type_layout = QHBoxLayout()
         plate_type_layout.addWidget(QLabel("Plate type:"))
 
+        
+
         self.plate_combo = QComboBox()
         self.plate_combo.addItems(
             [
@@ -456,11 +482,82 @@ class MainWindow(QMainWindow):
         self.calibrate_button.setEnabled(False)
         self.calibrate_button.clicked.connect(self.open_a1_calibration_dialog)
         layout.addWidget(self.calibrate_button)
+        self.navigate_to_well_button = QPushButton(
+            "Navigate to selected well"
+        )
+        self.navigate_to_well_button.setEnabled(False)
+        layout.addWidget(self.navigate_to_well_button)
+
+        self.navigate_to_well_button.clicked.connect(
+            self.navigate_to_selected_well
+        )
 
         self.current_plate_widget = None
         self.load_plate_widget("96-well plate")
 
         return group
+
+    def navigate_to_selected_well(self) -> None:
+        if (
+            self.current_plate_widget is None
+            or not self.stage_connected
+            or self.stage_busy
+        ):
+            return
+
+        selected_wells = (
+            self.current_plate_widget.get_selected_wells()
+        )
+
+        if len(selected_wells) != 1:
+            return
+
+        well_name = selected_wells[0]
+        plate = self.current_plate_widget.plate
+
+        try:
+            relative_x_mm, relative_y_mm = (
+                plate.get_relative_position(well_name)
+            )
+
+            absolute_x_mm, absolute_y_mm = (
+                self.calibration_manager.get_absolute_well_position(
+                    plate.name,
+                    relative_x_mm,
+                    relative_y_mm,
+                )
+            )
+        except (ValueError, RuntimeError) as exc:
+            QMessageBox.critical(
+                self,
+                "Navigation error",
+                str(exc),
+            )
+            return
+
+        self.request_absolute_move.emit(
+            absolute_x_mm,
+            absolute_y_mm,
+        )
+
+    def update_navigation_button_state(self) -> None:
+        if self.current_plate_widget is None:
+            self.navigate_to_well_button.setEnabled(False)
+            return
+
+        selected_wells = (
+            self.current_plate_widget.get_selected_wells()
+        )
+        plate_name = self.current_plate_widget.plate.name
+
+        can_navigate = (
+            self.stage_connected
+            and not self.stage_busy
+            and len(selected_wells) == 1
+            and self.calibration_manager.is_calibrated(plate_name)
+        )
+
+        self.navigate_to_well_button.setEnabled(can_navigate)
 
     def clear_plate_widget(self) -> None:
         while self.plate_map_layout.count():
@@ -497,10 +594,12 @@ class MainWindow(QMainWindow):
 
         self.plate_map_layout.addWidget(self.current_plate_widget)
 
+
         if hasattr(self, "experiment_designer"):
             self.experiment_designer.refresh()
 
         self.update_calibration_status()
+        self.update_navigation_button_state()
 
         self.statusBar().showMessage(f"Loaded {plate_name}")
 
@@ -532,6 +631,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         self.experiment_protocol.selected_wells = list(selected_wells)
         self.experiment_designer.refresh()
+        self.update_navigation_button_state()
 
         self.statusBar().showMessage(
             f"{self.experiment_protocol.selected_well_count} well(s) selected"
@@ -565,6 +665,7 @@ class MainWindow(QMainWindow):
         self.calibration_status_label.setStyleSheet(
             "font-weight: bold; color: #16803a;"
         )
+        self.update_navigation_button_state()
 
     def open_a1_calibration_dialog(self) -> None:
         if not self.stage_connected:
