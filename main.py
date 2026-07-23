@@ -26,7 +26,7 @@ from plates.plate_geometry import PlateGeometry
 from plates.well_plate_widget import WellPlateWidget
 from calibration.calibration_manager import CalibrationManager
 from experiment.experiment_protocol import ExperimentProtocol
-from experiment_designer_widget import ExperimentDesignerWidget
+from experiment.experiment_designer_widget import ExperimentDesignerWidget
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
