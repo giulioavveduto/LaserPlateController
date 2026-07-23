@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
     QDialog,
     QDialogButtonBox,
-    QFileDialog,     
+    QFileDialog,
+    QScrollArea,
 )
 
 from stage.stage_worker import StageWorker
@@ -30,8 +31,8 @@ from plates.well_plate_widget import WellPlateWidget
 from calibration.calibration_manager import CalibrationManager
 from experiment.experiment_protocol import ExperimentProtocol
 from experiment.experiment_designer_widget import ExperimentDesignerWidget
-from experiment.protocol_io import save_protocol
 from experiment.protocol_io import load_protocol, save_protocol
+from experiment.experiment_runner import ExperimentRunner
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -54,14 +55,26 @@ class MainWindow(QMainWindow):
         self.experiment_protocol = ExperimentProtocol(
             plate_type="96-well plate"
         )
+        self.experiment_runner = ExperimentRunner(self)
         self.current_protocol_path: Path | None = None
         self.setWindowTitle("Laser Plate Controller")
         self.resize(1100, 750)
+        self.setMinimumSize(800, 600)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
 
         central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-
         main_layout = QVBoxLayout(central_widget)
+
+        scroll_area.setWidget(central_widget)
+        self.setCentralWidget(scroll_area)
 
         title = QLabel("Laser Plate Controller")
         title.setStyleSheet("font-size: 26px; font-weight: bold; padding: 10px;")
@@ -75,6 +88,9 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(body_layout)
         self.experiment_designer = ExperimentDesignerWidget(
             self.experiment_protocol
+        )
+        self.experiment_designer.protocol_changed.connect(
+            self.update_start_button_state
         )
         main_layout.addWidget(self.experiment_designer)
 
@@ -254,6 +270,7 @@ class MainWindow(QMainWindow):
 
         self.current_protocol_path = path
         self.update_window_title()
+        self.update_start_button_state()
 
         self.statusBar().showMessage(
             f"Protocol opened: {path.name}",
@@ -329,11 +346,26 @@ class MainWindow(QMainWindow):
         self.disconnect_button = QPushButton("Disconnect")
         self.disconnect_button.setEnabled(False)
         self.disconnect_button.clicked.connect(
-            self.request_disconnect_stage.emit
+            self.request_stage_disconnection
         )
         layout.addWidget(self.disconnect_button)
 
         return group
+
+    def request_stage_disconnection(self) -> None:
+        if not self.stage_connected:
+            return
+
+        if self.stage_busy:
+            QMessageBox.warning(
+                self,
+                "Stage movement in progress",
+                "Wait for the current movement to finish before disconnecting.",
+            )
+            return
+
+        self.disconnect_button.setEnabled(False)
+        self.request_disconnect_stage.emit()
 
     def create_stage_section(self) -> QGroupBox:
         group = QGroupBox("Stage control")
@@ -559,6 +591,20 @@ class MainWindow(QMainWindow):
 
         self.navigate_to_well_button.setEnabled(can_navigate)
 
+    def update_start_button_state(self) -> None:
+        plate_name = self.experiment_protocol.plate_type
+
+        can_start = (
+            self.experiment_protocol.is_valid
+            and self.stage_connected
+            and not self.stage_busy
+            and bool(plate_name)
+            and self.calibration_manager.is_calibrated(plate_name)
+            and not self.experiment_runner.is_running
+        )
+
+        self.start_button.setEnabled(can_start)
+
     def clear_plate_widget(self) -> None:
         while self.plate_map_layout.count():
             item = self.plate_map_layout.takeAt(0)
@@ -601,6 +647,8 @@ class MainWindow(QMainWindow):
 
         self.update_calibration_status()
         self.update_navigation_button_state()
+        if hasattr(self, "start_button"):
+            self.update_start_button_state()
 
         self.statusBar().showMessage(f"Loaded {plate_name}")
 
@@ -637,6 +685,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{self.experiment_protocol.selected_well_count} well(s) selected"
         )
+        self.update_start_button_state()
 
     def update_calibration_status(self) -> None:
         if self.current_plate_widget is None:
@@ -736,6 +785,7 @@ class MainWindow(QMainWindow):
             return
 
         self.update_calibration_status()
+        self.update_start_button_state()
 
         QMessageBox.information(
             self,
@@ -851,6 +901,7 @@ class MainWindow(QMainWindow):
             )
 
         self.update_navigation_button_state()
+        self.update_start_button_state()
 
     def on_stage_disconnected(self) -> None:
         self.stage_connected = False
@@ -871,6 +922,8 @@ class MainWindow(QMainWindow):
         self.position_label.setText("Position\nX: undefined\nY: undefined")
         self.statusBar().showMessage("Stage disconnected")
         self.update_navigation_button_state()
+        self.update_navigation_button_state()
+        self.update_start_button_state()
 
     def update_position_display(
         self,
@@ -883,6 +936,7 @@ class MainWindow(QMainWindow):
         self.position_label.setText(
             f"Position\nX: {x_mm:.3f} mm\nY: {y_mm:.3f} mm"
         )
+        self.update_start_button_state()
 
     def on_movement_started(
         self,
@@ -891,11 +945,14 @@ class MainWindow(QMainWindow):
     ) -> None:
         self.stage_busy = True
         self.set_stage_controls_enabled(False)
+        self.disconnect_button.setEnabled(False)
 
         self.statusBar().showMessage(
-            f"Moving stage: ΔX={dx_mm:.3f} mm, " f"ΔY={dy_mm:.3f} mm"
+            f"Moving stage: ΔX={dx_mm:.3f} mm, "
+            f"ΔY={dy_mm:.3f} mm"
         )
         self.update_navigation_button_state()
+        self.update_start_button_state()
 
     def on_movement_finished(
         self,
@@ -908,12 +965,16 @@ class MainWindow(QMainWindow):
         self.update_position_display(x_mm, y_mm)
         self.statusBar().showMessage("Movement complete")
         self.update_navigation_button_state()
+        self.update_start_button_state()
+        self.disconnect_button.setEnabled(self.stage_connected)
 
     def on_homing_started(self) -> None:
         self.stage_busy = True
         self.set_stage_controls_enabled(False)
         self.statusBar().showMessage("Homing stage...")
+        self.disconnect_button.setEnabled(False)
         self.update_navigation_button_state()
+        self.update_start_button_state()
 
     def on_homing_finished(
         self,
@@ -926,6 +987,8 @@ class MainWindow(QMainWindow):
         self.update_position_display(x_mm, y_mm)
         self.statusBar().showMessage("Homing complete")
         self.update_navigation_button_state()
+        self.update_start_button_state()
+        self.disconnect_button.setEnabled(self.stage_connected)
 
     def show_stage_error(self, message: str) -> None:
         self.stage_busy = False
@@ -939,6 +1002,8 @@ class MainWindow(QMainWindow):
             message,
         )
         self.update_navigation_button_state()
+        self.update_start_button_state()
+        self.disconnect_button.setEnabled(self.stage_connected)
     
     def request_absolute_position(self) -> None:
         if not self.stage_connected or self.stage_busy:
@@ -960,7 +1025,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Moving to absolute position: " f"X={x_mm:.3f} mm, Y={y_mm:.3f} mm"
         )
+        self.disconnect_button.setEnabled(False)
         self.update_navigation_button_state()
+        self.update_start_button_state()
+
 
     def closeEvent(self, event) -> None:
         if self.stage_thread.isRunning():

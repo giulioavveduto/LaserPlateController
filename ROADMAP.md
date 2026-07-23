@@ -46,8 +46,8 @@ Develop a reliable desktop application for automated laser exposure of multiwell
 ## Milestone 5 — Experiment execution
 
 - [x] Define the initial ExperimentRunner state model
-- [ ] Snapshot a valid protocol when execution starts
-- [ ] Enable Start only when all prerequisites are satisfied
+- [x] Snapshot a valid protocol when execution starts
+- [x] Enable Start only when all prerequisites are satisfied
 - [ ] Move automatically between selected wells
 - [ ] Run the exposure timer at each well
 - [ ] Display current well
@@ -70,6 +70,7 @@ Develop a reliable desktop application for automated laser exposure of multiwell
 
 - [ ] Add automated tests for protocol and runner logic
 - [ ] Test simulator workflows
+- [ ] Add an optional asynchronous movement delay to the simulator
 - [ ] Validate positioning accuracy and repeatability
 - [ ] Validate complete experiments with the physical stage
 - [ ] Add structured experiment logs

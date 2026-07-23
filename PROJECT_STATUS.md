@@ -1,6 +1,6 @@
 ﻿# Project Status
 
-Last updated: 2026-07-23  
+Last updated: 2026-07-23
 Latest validated commit: `2bcdf8d`
 
 ## Current milestone
@@ -46,6 +46,25 @@ It also defines signals for state, current well, remaining time, completion and 
 
 The runner is not yet connected to the GUI or stage.
 
+
+`ExperimentRunner.start()` now:
+
+- Rejects invalid protocols
+- Prevents starting while already running
+- Snapshots the plate type, selected wells and exposure time
+- Sets the first current well
+- Calculates the initial remaining exposure time
+- Enters the `MOVING` state
+
+The GUI now enables Start only when:
+
+- The protocol is valid
+- The stage is connected and idle
+- The selected plate has an A1 calibration
+- The experiment runner is not running
+
+The Start button is not yet connected to automatic experiment execution.
+
 ## Last validation
 
 Passed:
@@ -58,6 +77,11 @@ Passed:
 - Navigation is restored after movement when its prerequisites remain valid
 - Protocol save and restoration work
 - Simulator navigation reaches the expected coordinates
+- Runner protocol snapshot test passed
+- Start eligibility responds to protocol, calibration and connection state
+- Disconnecting the controller disables Start
+- The interface remains accessible through a scrollable layout
+- Normal stage disconnection is prevented while the stage is busy
 
 ## Known limitations
 
@@ -68,20 +92,26 @@ Passed:
 - No stop or pause execution logic
 - No laser-control integration
 - ExperimentRunner has not yet been tested through the GUI
+- Start does not yet trigger execution
+- No automatic movement through selected wells
+- No exposure countdown
+- No stop or pause execution logic
+- Movement-dependent states still require physical-stage validation
+- The simulator completes movements immediately
+- Optional asynchronous simulator movement delay is postponed
+- No laser-control integration
 
 ## Next step
 
-Add `start()` and protocol snapshotting to `ExperimentRunner`.
+Connect the Start button to `ExperimentRunner.start()` and display:
 
-Then connect Start-button eligibility to:
+- Experiment state
+- Current well
+- Remaining exposure time
 
-- Valid protocol
-- Connected stage
-- Idle stage
-- Available A1 calibration for the selected plate
-- Idle experiment runner
+This first integration must remain state-only: it must not move the stage or activate the laser.
 
-Initial execution tests must use the simulator.
+After validating the GUI state transitions, connect the runner to automatic stage movement.
 
 ## Architectural decisions
 
