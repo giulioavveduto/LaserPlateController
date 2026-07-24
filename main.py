@@ -34,6 +34,7 @@ from experiment.experiment_designer_widget import ExperimentDesignerWidget
 from experiment.protocol_io import load_protocol, save_protocol
 from experiment.experiment_runner import ExperimentRunner, ExperimentState
 
+
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
     request_stage_mode = Signal(str)
@@ -47,14 +48,13 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.stage_connected = False
+        self.stage_homed = False
         self.stage_busy = False
         self.current_x_mm: float | None = None
         self.current_y_mm: float | None = None
 
         self.calibration_manager = CalibrationManager()
-        self.experiment_protocol = ExperimentProtocol(
-            plate_type="96-well plate"
-        )
+        self.experiment_protocol = ExperimentProtocol(plate_type="96-well plate")
         self.experiment_runner = ExperimentRunner(self)
         self.current_protocol_path: Path | None = None
         self.setWindowTitle("Laser Plate Controller")
@@ -63,12 +63,8 @@ class MainWindow(QMainWindow):
 
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        scroll_area.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         central_widget = QWidget()
         main_layout = QVBoxLayout(central_widget)
@@ -86,9 +82,7 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(self.create_stage_section(), stretch=1)
         body_layout.addWidget(self.create_plate_section(), stretch=2)
         main_layout.addLayout(body_layout)
-        self.experiment_designer = ExperimentDesignerWidget(
-            self.experiment_protocol
-        )
+        self.experiment_designer = ExperimentDesignerWidget(self.experiment_protocol)
         self.experiment_designer.protocol_changed.connect(
             self.update_start_button_state
         )
@@ -100,22 +94,16 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.start_button.setMinimumHeight(55)
         self.start_button.setStyleSheet("font-size: 18px; font-weight: bold;")
-        self.start_button.clicked.connect(
-            self.start_experiment
-        )
+        self.start_button.clicked.connect(self.start_experiment)
         main_layout.addWidget(self.start_button)
-        self.experiment_runner.state_changed.connect(
-            self.on_experiment_state_changed
-        )
+        self.experiment_runner.state_changed.connect(self.on_experiment_state_changed)
         self.experiment_runner.current_well_changed.connect(
             self.on_current_well_changed
         )
         self.experiment_runner.remaining_time_changed.connect(
             self.on_remaining_time_changed
         )
-        self.experiment_runner.error_occurred.connect(
-            self.on_experiment_error
-        )
+        self.experiment_runner.error_occurred.connect(self.on_experiment_error)
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Application ready")
@@ -138,7 +126,6 @@ class MainWindow(QMainWindow):
         self.create_menu_bar()
 
         self.create_stage_thread()
-        
 
     def create_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -149,14 +136,10 @@ class MainWindow(QMainWindow):
 
         self.open_action.triggered.connect(self.on_open_requested)
         self.save_action.triggered.connect(self.on_save_requested)
-        self.save_as_action.triggered.connect(
-            self.on_save_as_requested
-        )
+        self.save_as_action.triggered.connect(self.on_save_as_requested)
         self.open_action.setShortcut(QKeySequence.StandardKey.Open)
         self.save_action.setShortcut(QKeySequence.StandardKey.Save)
-        self.save_as_action.setShortcut(
-            QKeySequence.StandardKey.SaveAs
-        )
+        self.save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
 
         file_menu.addAction(self.open_action)
         file_menu.addSeparator()
@@ -262,21 +245,15 @@ class MainWindow(QMainWindow):
 
         self.experiment_protocol.name = loaded_protocol.name
         self.experiment_protocol.plate_type = loaded_protocol.plate_type
-        self.experiment_protocol.selected_wells = list(
-            loaded_protocol.selected_wells
-        )
+        self.experiment_protocol.selected_wells = list(loaded_protocol.selected_wells)
         self.experiment_protocol.common_exposure_time_s = (
             loaded_protocol.common_exposure_time_s
         )
 
-        self.plate_combo.setCurrentText(
-            loaded_protocol.plate_type
-        )
+        self.plate_combo.setCurrentText(loaded_protocol.plate_type)
 
         if self.current_plate_widget is not None:
-            self.current_plate_widget.set_selected_wells(
-                loaded_protocol.selected_wells
-            )
+            self.current_plate_widget.set_selected_wells(loaded_protocol.selected_wells)
 
         self.experiment_designer.exposure_time_spinbox.setValue(
             loaded_protocol.common_exposure_time_s
@@ -307,6 +284,7 @@ class MainWindow(QMainWindow):
         self.request_home_stage.connect(self.stage_worker.home_stage)
 
         self.stage_worker.connected.connect(self.on_stage_connected)
+        self.stage_worker.connected_unhomed.connect(self.on_stage_connected_unhomed)
         self.stage_worker.disconnected.connect(self.on_stage_disconnected)
         self.stage_worker.position_updated.connect(self.update_position_display)
 
@@ -347,22 +325,16 @@ class MainWindow(QMainWindow):
             ]
         )
         self.stage_mode_combo.setCurrentText("Simulator")
-        self.stage_mode_combo.currentTextChanged.connect(
-            self.request_stage_mode.emit
-        )
+        self.stage_mode_combo.currentTextChanged.connect(self.request_stage_mode.emit)
         layout.addWidget(self.stage_mode_combo)
 
         self.connect_button = QPushButton("Connect stage")
-        self.connect_button.clicked.connect(
-            self.request_connect_stage.emit
-        )
+        self.connect_button.clicked.connect(self.request_connect_stage.emit)
         layout.addWidget(self.connect_button)
 
         self.disconnect_button = QPushButton("Disconnect")
         self.disconnect_button.setEnabled(False)
-        self.disconnect_button.clicked.connect(
-            self.request_stage_disconnection
-        )
+        self.disconnect_button.clicked.connect(self.request_stage_disconnection)
         layout.addWidget(self.disconnect_button)
 
         return group
@@ -447,7 +419,7 @@ class MainWindow(QMainWindow):
         absolute_layout.addWidget(QLabel("X:"), 0, 0)
 
         self.absolute_x_spinbox = QDoubleSpinBox()
-        self.absolute_x_spinbox.setRange(0.0, 200.0)
+        self.absolute_x_spinbox.setRange(0.0, 80.0)
         self.absolute_x_spinbox.setDecimals(3)
         self.absolute_x_spinbox.setSuffix(" mm")
         absolute_layout.addWidget(self.absolute_x_spinbox, 0, 1)
@@ -455,7 +427,7 @@ class MainWindow(QMainWindow):
         absolute_layout.addWidget(QLabel("Y:"), 1, 0)
 
         self.absolute_y_spinbox = QDoubleSpinBox()
-        self.absolute_y_spinbox.setRange(0.0, 200.0)
+        self.absolute_y_spinbox.setRange(0.0, 120.0)
         self.absolute_y_spinbox.setDecimals(3)
         self.absolute_y_spinbox.setSuffix(" mm")
         absolute_layout.addWidget(self.absolute_y_spinbox, 1, 1)
@@ -480,16 +452,13 @@ class MainWindow(QMainWindow):
 
         return group
 
-
     def update_window_title(self) -> None:
         if self.current_protocol_path is None:
             protocol_name = "Untitled"
         else:
             protocol_name = self.current_protocol_path.name
 
-        self.setWindowTitle(
-            f"Laser Plate Controller — {protocol_name}"
-        )
+        self.setWindowTitle(f"Laser Plate Controller — {protocol_name}")
 
     def create_plate_section(self) -> QGroupBox:
         group = QGroupBox("Plate configuration")
@@ -497,8 +466,6 @@ class MainWindow(QMainWindow):
 
         plate_type_layout = QHBoxLayout()
         plate_type_layout.addWidget(QLabel("Plate type:"))
-
-        
 
         self.plate_combo = QComboBox()
         self.plate_combo.addItems(
@@ -529,15 +496,11 @@ class MainWindow(QMainWindow):
         self.calibrate_button.setEnabled(False)
         self.calibrate_button.clicked.connect(self.open_a1_calibration_dialog)
         layout.addWidget(self.calibrate_button)
-        self.navigate_to_well_button = QPushButton(
-            "Navigate to selected well"
-        )
+        self.navigate_to_well_button = QPushButton("Navigate to selected well")
         self.navigate_to_well_button.setEnabled(False)
         layout.addWidget(self.navigate_to_well_button)
 
-        self.navigate_to_well_button.clicked.connect(
-            self.navigate_to_selected_well
-        )
+        self.navigate_to_well_button.clicked.connect(self.navigate_to_selected_well)
 
         self.current_plate_widget = None
         self.load_plate_widget("96-well plate")
@@ -548,13 +511,12 @@ class MainWindow(QMainWindow):
         if (
             self.current_plate_widget is None
             or not self.stage_connected
+            or not self.stage_homed
             or self.stage_busy
         ):
             return
 
-        selected_wells = (
-            self.current_plate_widget.get_selected_wells()
-        )
+        selected_wells = self.current_plate_widget.get_selected_wells()
 
         if len(selected_wells) != 1:
             return
@@ -563,9 +525,7 @@ class MainWindow(QMainWindow):
         plate = self.current_plate_widget.plate
 
         try:
-            relative_x_mm, relative_y_mm = (
-                plate.get_relative_position(well_name)
-            )
+            relative_x_mm, relative_y_mm = plate.get_relative_position(well_name)
 
             absolute_x_mm, absolute_y_mm = (
                 self.calibration_manager.get_absolute_well_position(
@@ -592,13 +552,12 @@ class MainWindow(QMainWindow):
             self.navigate_to_well_button.setEnabled(False)
             return
 
-        selected_wells = (
-            self.current_plate_widget.get_selected_wells()
-        )
+        selected_wells = self.current_plate_widget.get_selected_wells()
         plate_name = self.current_plate_widget.plate.name
 
         can_navigate = (
             self.stage_connected
+            and self.stage_homed
             and not self.stage_busy
             and len(selected_wells) == 1
             and self.calibration_manager.is_calibrated(plate_name)
@@ -612,6 +571,7 @@ class MainWindow(QMainWindow):
         can_start = (
             self.experiment_protocol.is_valid
             and self.stage_connected
+            and self.stage_homed
             and not self.stage_busy
             and bool(plate_name)
             and self.calibration_manager.is_calibrated(plate_name)
@@ -619,14 +579,13 @@ class MainWindow(QMainWindow):
         )
 
         self.start_button.setEnabled(can_start)
+
     def start_experiment(self) -> None:
         if not self.start_button.isEnabled():
             return
 
         try:
-            self.experiment_runner.start(
-                self.experiment_protocol
-            )
+            self.experiment_runner.start(self.experiment_protocol)
         except (RuntimeError, ValueError) as exc:
             QMessageBox.critical(
                 self,
@@ -650,22 +609,14 @@ class MainWindow(QMainWindow):
         self.update_start_button_state()
 
     def on_current_well_changed(self, well_name: str) -> None:
-        self.experiment_designer.current_well_label.setText(
-            well_name
-        )
+        self.experiment_designer.current_well_label.setText(well_name)
 
     def on_remaining_time_changed(
         self,
         remaining_time_s: float,
     ) -> None:
-        formatted_time = (
-            self.experiment_designer.format_duration(
-                remaining_time_s
-            )
-        )
-        self.experiment_designer.remaining_time_label.setText(
-            formatted_time
-        )
+        formatted_time = self.experiment_designer.format_duration(remaining_time_s)
+        self.experiment_designer.remaining_time_label.setText(formatted_time)
 
     def on_experiment_error(self, message: str) -> None:
         QMessageBox.critical(
@@ -674,6 +625,7 @@ class MainWindow(QMainWindow):
             message,
         )
         self.update_start_button_state()
+
     def clear_plate_widget(self) -> None:
         while self.plate_map_layout.count():
             item = self.plate_map_layout.takeAt(0)
@@ -709,7 +661,6 @@ class MainWindow(QMainWindow):
         )
 
         self.plate_map_layout.addWidget(self.current_plate_widget)
-
 
         if hasattr(self, "experiment_designer"):
             self.experiment_designer.refresh()
@@ -758,18 +709,14 @@ class MainWindow(QMainWindow):
 
     def update_calibration_status(self) -> None:
         if self.current_plate_widget is None:
-            self.calibration_status_label.setText(
-                "A1 calibration: not defined"
-            )
+            self.calibration_status_label.setText("A1 calibration: not defined")
             return
 
         plate_name = self.current_plate_widget.plate.name
         a1_position = self.calibration_manager.get_a1(plate_name)
 
         if a1_position is None:
-            self.calibration_status_label.setText(
-                "A1 calibration: not defined"
-            )
+            self.calibration_status_label.setText("A1 calibration: not defined")
             self.calibration_status_label.setStyleSheet(
                 "font-weight: bold; color: #a12626;"
             )
@@ -778,8 +725,7 @@ class MainWindow(QMainWindow):
         a1_x_mm, a1_y_mm = a1_position
 
         self.calibration_status_label.setText(
-            f"A1 calibration: X={a1_x_mm:.3f} mm, "
-            f"Y={a1_y_mm:.3f} mm"
+            f"A1 calibration: X={a1_x_mm:.3f} mm, " f"Y={a1_y_mm:.3f} mm"
         )
         self.calibration_status_label.setStyleSheet(
             "font-weight: bold; color: #16803a;"
@@ -916,7 +862,7 @@ class MainWindow(QMainWindow):
         dx_mm: float,
         dy_mm: float,
     ) -> None:
-        if not self.stage_connected or self.stage_busy:
+        if not self.stage_connected or not self.stage_homed or self.stage_busy:
             return
 
         self.request_move_stage.emit(dx_mm, dy_mm)
@@ -943,6 +889,7 @@ class MainWindow(QMainWindow):
         y_mm: float,
     ) -> None:
         self.stage_connected = True
+        self.stage_homed = True
         self.stage_busy = False
 
         mode = self.stage_mode_combo.currentText()
@@ -965,16 +912,46 @@ class MainWindow(QMainWindow):
                 "Simulated stage connected — no physical hardware is active"
             )
         else:
-            self.statusBar().showMessage(
-                "Real DMSTC stage connected"
-            )
+            self.statusBar().showMessage("Real DMSTC stage connected")
+
+        self.update_navigation_button_state()
+        self.update_start_button_state()
+
+    def on_stage_connected_unhomed(self) -> None:
+        self.stage_connected = True
+        self.stage_homed = False
+        self.stage_busy = False
+        self.current_x_mm = None
+        self.current_y_mm = None
+
+        self.set_device_status(
+            self.stage_status_label,
+            "Stage: Real DMSTC connected — homing required",
+            True,
+        )
+
+        self.connect_button.setEnabled(False)
+        self.stage_mode_combo.setEnabled(False)
+        self.disconnect_button.setEnabled(True)
+
+        self.set_stage_controls_enabled(False)
+        self.home_button.setEnabled(True)
+        self.calibrate_button.setEnabled(False)
+
+        self.position_label.setText("Position\nX: undefined\nY: undefined")
+        self.statusBar().showMessage(
+            "Real DMSTC stage connected — home the stage before movement"
+        )
 
         self.update_navigation_button_state()
         self.update_start_button_state()
 
     def on_stage_disconnected(self) -> None:
         self.stage_connected = False
+        self.stage_homed = False
         self.stage_busy = False
+        self.current_x_mm = None
+        self.current_y_mm = None
 
         self.set_device_status(
             self.stage_status_label,
@@ -1001,9 +978,7 @@ class MainWindow(QMainWindow):
         self.current_x_mm = x_mm
         self.current_y_mm = y_mm
 
-        self.position_label.setText(
-            f"Position\nX: {x_mm:.3f} mm\nY: {y_mm:.3f} mm"
-        )
+        self.position_label.setText(f"Position\nX: {x_mm:.3f} mm\nY: {y_mm:.3f} mm")
         self.update_start_button_state()
 
     def on_movement_started(
@@ -1016,8 +991,7 @@ class MainWindow(QMainWindow):
         self.disconnect_button.setEnabled(False)
 
         self.statusBar().showMessage(
-            f"Moving stage: ΔX={dx_mm:.3f} mm, "
-            f"ΔY={dy_mm:.3f} mm"
+            f"Moving stage: ΔX={dx_mm:.3f} mm, " f"ΔY={dy_mm:.3f} mm"
         )
         self.update_navigation_button_state()
         self.update_start_button_state()
@@ -1049,8 +1023,15 @@ class MainWindow(QMainWindow):
         x_mm: float,
         y_mm: float,
     ) -> None:
+        self.stage_homed = True
+        self.set_device_status(
+            self.stage_status_label,
+            "Stage: Real DMSTC connected",
+            True,
+        )
         self.stage_busy = False
         self.set_stage_controls_enabled(True)
+        self.calibrate_button.setEnabled(True)
 
         self.update_position_display(x_mm, y_mm)
         self.statusBar().showMessage("Homing complete")
@@ -1061,8 +1042,12 @@ class MainWindow(QMainWindow):
     def show_stage_error(self, message: str) -> None:
         self.stage_busy = False
 
-        if self.stage_connected:
+        if self.stage_connected and self.stage_homed:
             self.set_stage_controls_enabled(True)
+        elif self.stage_connected:
+            self.set_stage_controls_enabled(False)
+            self.home_button.setEnabled(True)
+            self.calibrate_button.setEnabled(False)
 
         QMessageBox.critical(
             self,
@@ -1072,9 +1057,9 @@ class MainWindow(QMainWindow):
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
-    
+
     def request_absolute_position(self) -> None:
-        if not self.stage_connected or self.stage_busy:
+        if not self.stage_connected or not self.stage_homed or self.stage_busy:
             return
 
         x_mm = self.absolute_x_spinbox.value()
@@ -1096,7 +1081,6 @@ class MainWindow(QMainWindow):
         self.disconnect_button.setEnabled(False)
         self.update_navigation_button_state()
         self.update_start_button_state()
-
 
     def closeEvent(self, event) -> None:
         if self.stage_thread.isRunning():

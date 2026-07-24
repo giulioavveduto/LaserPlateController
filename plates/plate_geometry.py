@@ -83,8 +83,8 @@ class PlateGeometry:
         row_index = ord(row_letter) - ord("A")
         column_index = column_number - 1
 
-        x_mm = column_index * self.pitch_x_mm
-        y_mm = row_index * self.pitch_y_mm
+        x_mm = row_index * self.pitch_y_mm
+        y_mm = column_index * self.pitch_x_mm
 
         return x_mm, y_mm
 

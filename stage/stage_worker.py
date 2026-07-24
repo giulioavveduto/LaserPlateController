@@ -8,8 +8,10 @@ from stage.dmstc_stage import DMSTCStage
 from simulated_stage import SimulatedStage
 from stage_modes import StageMode
 
+
 class StageWorker(QObject):
     connected = Signal(float, float)
+    connected_unhomed = Signal()
     disconnected = Signal()
     position_updated = Signal(float, float)
 
@@ -49,9 +51,7 @@ class StageWorker(QObject):
         try:
             self.stage_mode = StageMode(mode_value)
         except ValueError:
-            self.error_occurred.emit(
-                f"Unknown stage mode: {mode_value}"
-            )
+            self.error_occurred.emit(f"Unknown stage mode: {mode_value}")
 
     @Slot()
     def connect_stage(self) -> None:
@@ -64,7 +64,17 @@ class StageWorker(QObject):
             else:
                 self.stage = DMSTCStage()
 
-            x_mm, y_mm = self.stage.get_position_mm()
+            try:
+                x_mm, y_mm = self.stage.get_position_mm()
+            except RuntimeError as exc:
+                if (
+                    self.stage_mode is StageMode.REAL_DMSTC
+                    and "position is undefined" in str(exc).lower()
+                ):
+                    self.connected_unhomed.emit()
+                    return
+
+                raise
 
             if self.position_timer is not None:
                 self.position_timer.start()
@@ -100,9 +110,7 @@ class StageWorker(QObject):
             self.position_updated.emit(x_mm, y_mm)
 
         except Exception as exc:
-            self.error_occurred.emit(
-                f"Could not read the stage position:\n{exc}"
-            )
+            self.error_occurred.emit(f"Could not read the stage position:\n{exc}")
 
     @Slot(float, float)
     def move_relative(self, dx_mm: float, dy_mm: float) -> None:
@@ -124,9 +132,7 @@ class StageWorker(QObject):
             self.movement_finished.emit(x_mm, y_mm)
 
         except Exception as exc:
-            self.error_occurred.emit(
-                f"Stage movement failed:\n{exc}"
-            )
+            self.error_occurred.emit(f"Stage movement failed:\n{exc}")
 
         finally:
             self.operation_in_progress = False
@@ -151,9 +157,7 @@ class StageWorker(QObject):
             self.movement_finished.emit(actual_x, actual_y)
 
         except Exception as exc:
-            self.error_occurred.emit(
-                f"Absolute stage movement failed:\n{exc}"
-            )
+            self.error_occurred.emit(f"Absolute stage movement failed:\n{exc}")
 
         finally:
             self.operation_in_progress = False
@@ -170,13 +174,15 @@ class StageWorker(QObject):
             self.stage.home(wait_seconds=20)
 
             x_mm, y_mm = self.stage.get_position_mm()
+
+            if self.position_timer is not None:
+                self.position_timer.start()
+
             self.position_updated.emit(x_mm, y_mm)
             self.homing_finished.emit(x_mm, y_mm)
 
         except Exception as exc:
-            self.error_occurred.emit(
-                f"Stage homing failed:\n{exc}"
-            )
+            self.error_occurred.emit(f"Stage homing failed:\n{exc}")
 
         finally:
             self.operation_in_progress = False

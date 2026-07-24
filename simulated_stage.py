@@ -6,8 +6,8 @@ import time
 class SimulatedStage:
     def __init__(
         self,
-        x_limit_mm: float = 120.0,
-        y_limit_mm: float = 80.0,
+        x_limit_mm: float = 80.0,
+        y_limit_mm: float = 120.0,
         movement_delay_s: float = 0.3,
     ) -> None:
         self.x_mm = 0.0
