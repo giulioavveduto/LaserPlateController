@@ -6,11 +6,13 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QLabel,
+    QProgressBar,
     QVBoxLayout,
     QWidget,
 )
 
 from experiment.experiment_protocol import ExperimentProtocol
+
 
 class ExperimentDesignerWidget(QWidget):
     protocol_changed = Signal()
@@ -45,9 +47,18 @@ class ExperimentDesignerWidget(QWidget):
         self.selected_wells_label = QLabel()
         self.estimated_duration_label = QLabel()
         self.validity_label = QLabel()
+
         self.experiment_state_label = QLabel("Idle")
         self.current_well_label = QLabel("--")
+        self.sequence_position_label = QLabel("--")
+        self.current_exposure_label = QLabel("--")
         self.remaining_time_label = QLabel("--")
+        self.completed_wells_label = QLabel("0 / 0")
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("0 / 0 wells completed")
 
         form_layout.addRow(
             "Common exposure time:",
@@ -74,13 +85,30 @@ class ExperimentDesignerWidget(QWidget):
             self.current_well_label,
         )
         form_layout.addRow(
-            "Remaining time:",
+            "Sequence position:",
+            self.sequence_position_label,
+        )
+        form_layout.addRow(
+            "Current exposure:",
+            self.current_exposure_label,
+        )
+        form_layout.addRow(
+            "Total remaining time:",
             self.remaining_time_label,
+        )
+        form_layout.addRow(
+            "Completed wells:",
+            self.completed_wells_label,
+        )
+        form_layout.addRow(
+            "Overall progress:",
+            self.progress_bar,
         )
 
         main_layout.addWidget(group)
 
         self.refresh()
+        self.reset_dashboard()
 
     def on_exposure_time_changed(self, value: float) -> None:
         self.protocol.common_exposure_time_s = value
@@ -109,6 +137,60 @@ class ExperimentDesignerWidget(QWidget):
                 "font-weight: bold; color: #a12626;"
             )
 
+    def update_dashboard(
+        self,
+        *,
+        state_text: str,
+        current_well: str | None,
+        current_index: int,
+        total_wells: int,
+        completed_wells: int,
+        current_exposure_remaining_s: float,
+        total_remaining_s: float,
+    ) -> None:
+        self.experiment_state_label.setText(state_text)
+        self.current_well_label.setText(current_well or "--")
+
+        if current_well is not None and total_wells > 0:
+            self.sequence_position_label.setText(
+                f"{current_index + 1} / {total_wells}"
+            )
+        else:
+            self.sequence_position_label.setText("--")
+
+        self.current_exposure_label.setText(
+            self.format_duration(current_exposure_remaining_s)
+        )
+        self.remaining_time_label.setText(
+            self.format_duration(total_remaining_s)
+        )
+
+        completed_wells = max(
+            0,
+            min(completed_wells, total_wells),
+        )
+
+        self.completed_wells_label.setText(
+            f"{completed_wells} / {total_wells}"
+        )
+
+        self.progress_bar.setRange(0, max(1, total_wells))
+        self.progress_bar.setValue(completed_wells)
+        self.progress_bar.setFormat(
+            f"{completed_wells} / {total_wells} wells completed"
+        )
+
+    def reset_dashboard(self) -> None:
+        self.update_dashboard(
+            state_text="Idle",
+            current_well=None,
+            current_index=-1,
+            total_wells=0,
+            completed_wells=0,
+            current_exposure_remaining_s=0.0,
+            total_remaining_s=0.0,
+        )
+
     @staticmethod
     def format_duration(duration_s: float) -> str:
         total_seconds = max(0, round(duration_s))
@@ -116,7 +198,10 @@ class ExperimentDesignerWidget(QWidget):
         hours, minutes = divmod(minutes, 60)
 
         if hours:
-            return f"{hours:d} h {minutes:02d} min {seconds:02d} s"
+            return (
+                f"{hours:d} h {minutes:02d} min "
+                f"{seconds:02d} s"
+            )
 
         if minutes:
             return f"{minutes:d} min {seconds:02d} s"

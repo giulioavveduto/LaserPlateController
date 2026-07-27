@@ -732,19 +732,61 @@ class MainWindow(QMainWindow):
         self.update_start_button_state()
 
     def on_experiment_stopped(self) -> None:
+        self.update_experiment_dashboard()
         self.statusBar().showMessage(
             "Experiment stopped — stage homed",
             10000,
         )
         self.update_experiment_controls()
 
+        
+    def update_experiment_dashboard(self) -> None:
+        runner = self.experiment_runner
+        total_wells = len(runner.wells)
+
+        completed_wells = min(
+            max(runner.current_well_index, 0),
+            total_wells,
+        )
+
+        if runner.state is ExperimentState.COMPLETED:
+            completed_wells = total_wells
+
+        current_exposure_remaining_s = 0.0
+
+        if (
+            runner.current_well is not None
+            and runner.state
+            in {
+                ExperimentState.MOVING,
+                ExperimentState.EXPOSING,
+                ExperimentState.PAUSED,
+            }
+        ):
+            current_exposure_remaining_s = (
+                runner.exposure_remaining_s
+            )
+
+        self.experiment_designer.update_dashboard(
+            state_text=runner.state.name.replace(
+                "_",
+                " ",
+            ).title(),
+            current_well=runner.current_well,
+            current_index=runner.current_well_index,
+            total_wells=total_wells,
+            completed_wells=completed_wells,
+            current_exposure_remaining_s=(
+                current_exposure_remaining_s
+            ),
+            total_remaining_s=runner.remaining_time_s,
+        )
+
     def on_experiment_state_changed(
         self,
         state: ExperimentState,
     ) -> None:
-        self.experiment_designer.experiment_state_label.setText(
-            state.name.replace("_", " ").title()
-        )
+        self.update_experiment_dashboard()
         self.update_experiment_controls()
 
     def on_experiment_move_requested(self, well_name: str) -> None:
@@ -773,21 +815,21 @@ class MainWindow(QMainWindow):
         )
 
     def on_experiment_finished(self) -> None:
+        self.update_experiment_dashboard()
         self.statusBar().showMessage(
             "Experiment completed — stage homed",
             10000,
         )
-        self.update_start_button_state()
+        self.update_experiment_controls()
 
     def on_current_well_changed(self, well_name: str) -> None:
-        self.experiment_designer.current_well_label.setText(well_name)
+        self.update_experiment_dashboard()
 
     def on_remaining_time_changed(
         self,
         remaining_time_s: float,
     ) -> None:
-        formatted_time = self.experiment_designer.format_duration(remaining_time_s)
-        self.experiment_designer.remaining_time_label.setText(formatted_time)
+        self.update_experiment_dashboard()
 
     def on_experiment_error(self, message: str) -> None:
         QMessageBox.critical(
