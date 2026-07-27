@@ -104,6 +104,16 @@ class MainWindow(QMainWindow):
             self.on_remaining_time_changed
         )
         self.experiment_runner.error_occurred.connect(self.on_experiment_error)
+        self.experiment_runner.move_requested.connect(
+            self.on_experiment_move_requested
+        )
+        self.experiment_runner.home_requested.connect(
+            self.request_home_stage.emit
+        )
+        self.experiment_runner.experiment_finished.connect(
+            self.on_experiment_finished
+        )
+
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Application ready")
@@ -595,9 +605,7 @@ class MainWindow(QMainWindow):
             return
 
         self.update_start_button_state()
-        self.statusBar().showMessage(
-            "Experiment initialized — automatic movement is not active yet"
-        )
+        self.statusBar().showMessage("Automatic experiment started")
 
     def on_experiment_state_changed(
         self,
@@ -605,6 +613,38 @@ class MainWindow(QMainWindow):
     ) -> None:
         self.experiment_designer.experiment_state_label.setText(
             state.name.replace("_", " ").title()
+        )
+        self.update_start_button_state()
+
+    def on_experiment_move_requested(self, well_name: str) -> None:
+        try:
+            plate = PlateGeometry(self.experiment_runner.plate_type)
+
+            relative_x_mm, relative_y_mm = (
+                plate.get_relative_position(well_name)
+            )
+
+            absolute_x_mm, absolute_y_mm = (
+                self.calibration_manager.get_absolute_well_position(
+                    plate.name,
+                    relative_x_mm,
+                    relative_y_mm,
+                )
+            )
+
+        except (ValueError, RuntimeError) as exc:
+            self.experiment_runner.fail(str(exc))
+            return
+
+        self.request_absolute_move.emit(
+            absolute_x_mm,
+            absolute_y_mm,
+        )
+
+    def on_experiment_finished(self) -> None:
+        self.statusBar().showMessage(
+            "Experiment completed — stage homed",
+            10000,
         )
         self.update_start_button_state()
 
@@ -1009,6 +1049,8 @@ class MainWindow(QMainWindow):
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
+        if self.experiment_runner.state is ExperimentState.MOVING:
+            self.experiment_runner.notify_movement_finished()
 
     def on_homing_started(self) -> None:
         self.stage_busy = True
@@ -1038,6 +1080,8 @@ class MainWindow(QMainWindow):
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
+        if self.experiment_runner.state is ExperimentState.HOMING:
+            self.experiment_runner.notify_homing_finished()
 
     def show_stage_error(self, message: str) -> None:
         self.stage_busy = False
