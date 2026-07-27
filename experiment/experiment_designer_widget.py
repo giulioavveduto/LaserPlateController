@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
@@ -13,6 +14,12 @@ from PySide6.QtWidgets import (
 
 from experiment.experiment_protocol import ExperimentProtocol
 
+class FocusWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
 
 class ExperimentDesignerWidget(QWidget):
     protocol_changed = Signal()
@@ -32,7 +39,9 @@ class ExperimentDesignerWidget(QWidget):
         group = QGroupBox("Experiment Designer")
         form_layout = QFormLayout(group)
 
-        self.exposure_time_spinbox = QDoubleSpinBox()
+        self.exposure_time_spinbox = FocusWheelDoubleSpinBox()
+        self.exposure_time_spinbox.setMinimumWidth(90)
+        self.exposure_time_spinbox.setMaximumWidth(125)        
         self.exposure_time_spinbox.setRange(0.0, 3600.0)
         self.exposure_time_spinbox.setDecimals(1)
         self.exposure_time_spinbox.setSingleStep(1.0)
@@ -53,7 +62,6 @@ class ExperimentDesignerWidget(QWidget):
         self.sequence_position_label = QLabel("--")
         self.current_exposure_label = QLabel("--")
         self.remaining_time_label = QLabel("--")
-        self.completed_wells_label = QLabel("0 / 0")
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1)
@@ -95,10 +103,6 @@ class ExperimentDesignerWidget(QWidget):
         form_layout.addRow(
             "Total remaining time:",
             self.remaining_time_label,
-        )
-        form_layout.addRow(
-            "Completed wells:",
-            self.completed_wells_label,
         )
         form_layout.addRow(
             "Overall progress:",
@@ -170,9 +174,6 @@ class ExperimentDesignerWidget(QWidget):
             min(completed_wells, total_wells),
         )
 
-        self.completed_wells_label.setText(
-            f"{completed_wells} / {total_wells}"
-        )
 
         self.progress_bar.setRange(0, max(1, total_wells))
         self.progress_bar.setValue(completed_wells)

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QMetaObject, QThread, Qt, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence,QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QStatusBar,
     QVBoxLayout,
+    QSizePolicy,
     QWidget,
     QDialog,
     QDialogButtonBox,
@@ -34,6 +35,12 @@ from experiment.experiment_designer_widget import ExperimentDesignerWidget
 from experiment.protocol_io import load_protocol, save_protocol
 from experiment.experiment_runner import ExperimentRunner, ExperimentState
 
+class FocusWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -403,6 +410,12 @@ class MainWindow(QMainWindow):
 
     def create_stage_section(self) -> QGroupBox:
         group = QGroupBox("Stage control")
+        group.setMinimumWidth(220)
+        group.setMaximumWidth(300)
+        group.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
         layout = QVBoxLayout(group)
 
         self.position_label = QLabel("Position\nX: undefined\nY: undefined")
@@ -412,11 +425,13 @@ class MainWindow(QMainWindow):
         step_layout = QHBoxLayout()
         step_layout.addWidget(QLabel("Movement step:"))
 
-        self.step_spinbox = QDoubleSpinBox()
+        self.step_spinbox = FocusWheelDoubleSpinBox()
         self.step_spinbox.setRange(0.001, 100.0)
         self.step_spinbox.setDecimals(3)
         self.step_spinbox.setValue(1.0)
         self.step_spinbox.setSuffix(" mm")
+        self.step_spinbox.setMinimumWidth(90)
+        self.step_spinbox.setMaximumWidth(125)
         step_layout.addWidget(self.step_spinbox)
 
         layout.addLayout(step_layout)
@@ -465,20 +480,24 @@ class MainWindow(QMainWindow):
 
         absolute_layout.addWidget(QLabel("X:"), 0, 0)
 
-        self.absolute_x_spinbox = QDoubleSpinBox()
+        self.absolute_x_spinbox = FocusWheelDoubleSpinBox()        
         self.absolute_x_spinbox.setRange(0.0, 80.0)
         self.absolute_x_spinbox.setDecimals(3)
         self.absolute_x_spinbox.setSuffix(" mm")
+        self.absolute_x_spinbox.setMinimumWidth(90)
+        self.absolute_x_spinbox.setMaximumWidth(125)
         absolute_layout.addWidget(self.absolute_x_spinbox, 0, 1)
 
         absolute_layout.addWidget(QLabel("Y:"), 1, 0)
 
-        self.absolute_y_spinbox = QDoubleSpinBox()
+        self.absolute_y_spinbox = FocusWheelDoubleSpinBox()
         self.absolute_y_spinbox.setRange(0.0, 120.0)
         self.absolute_y_spinbox.setDecimals(3)
         self.absolute_y_spinbox.setSuffix(" mm")
+        self.absolute_y_spinbox.setMinimumWidth(90)
+        self.absolute_y_spinbox.setMaximumWidth(125)
         absolute_layout.addWidget(self.absolute_y_spinbox, 1, 1)
-
+        
         self.absolute_go_button = QPushButton("GO TO POSITION")
         self.absolute_go_button.clicked.connect(self.request_absolute_position)
         absolute_layout.addWidget(
@@ -631,6 +650,13 @@ class MainWindow(QMainWindow):
         if not self.start_button.isEnabled():
             return
 
+        self._stopped_interrupted_well = None
+
+        if self.current_plate_widget is not None:
+            self.current_plate_widget.prepare_execution(
+                self.experiment_protocol.selected_wells
+            )
+
         try:
             self.experiment_runner.start(self.experiment_protocol)
         except (RuntimeError, ValueError) as exc:
@@ -659,12 +685,28 @@ class MainWindow(QMainWindow):
             )
 
     def stop_experiment(self) -> None:
+        runner = self.experiment_runner
+
+        exposure_has_started = (
+            runner.state is ExperimentState.EXPOSING
+            or (
+                runner.state is ExperimentState.PAUSED
+                and not runner.paused_before_exposure
+            )
+        )
+
+        self._stopped_interrupted_well = (
+            runner.current_well
+            if exposure_has_started
+            else None
+        )
+
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         self.statusBar().showMessage(
             "Stopping experiment — stage will return home"
         )
-        self.experiment_runner.request_stop()
+        runner.request_stop()
 
     def set_experiment_inputs_locked(self, locked: bool) -> None:
         enabled = not locked
@@ -767,6 +809,40 @@ class MainWindow(QMainWindow):
                 runner.exposure_remaining_s
             )
 
+        if self.current_plate_widget is not None:
+            completed_well_names = runner.wells[
+                :max(0, runner.current_well_index)
+            ]
+
+            if runner.state is ExperimentState.COMPLETED:
+                completed_well_names = list(runner.wells)
+
+            if runner.state in {
+                ExperimentState.MOVING,
+                ExperimentState.EXPOSING,
+                ExperimentState.PAUSED,
+            }:
+                displayed_current_well = runner.current_well
+            elif runner.state in {
+                ExperimentState.STOPPING,
+                ExperimentState.STOPPED,
+            }:
+                displayed_current_well = getattr(
+                    self,
+                    "_stopped_interrupted_well",
+                    None,
+                )
+            else:
+                displayed_current_well = None
+
+            self.current_plate_widget.update_execution_display(
+                current_well=displayed_current_well,
+                completed_wells=completed_well_names,
+            )
+            self.current_plate_widget.set_current_well_pulsing(
+                runner.current_well,
+                runner.state is ExperimentState.EXPOSING,
+            )
         self.experiment_designer.update_dashboard(
             state_text=runner.state.name.replace(
                 "_",

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QEnterEvent, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -25,35 +26,99 @@ class WellButton(QPushButton):
         super().__init__(well_name)
 
         self.well_name = well_name
+        self.execution_state: str | None = None
+        self.pulse_highlighted = False
         self.setCheckable(True)
-        self.setFixedSize(46, 46)
+        self.setMinimumSize(30, 30)
+        self.setMaximumSize(46, 46)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.toggled.connect(self.update_style)
         self.update_style()
 
     def update_style(self) -> None:
-        if self.isChecked():
-            self.setStyleSheet("""
-                QPushButton {
-                    border-radius: 23px;
-                    border: 2px solid #1f5f99;
-                    background-color: #7fb7e6;
-                    font-weight: bold;
-                }
-                """)
-        else:
-            self.setStyleSheet("""
-                QPushButton {
-                    border-radius: 23px;
-                    border: 2px solid #777777;
-                    background-color: #f4f4f4;
-                }
+        if self.execution_state == "completed":
+            background_color = "#79c98b"
+            border_color = "#287a3b"
+            font_weight = "bold"
+            hover_rule = ""
 
+        elif self.execution_state == "current":
+                background_color = (
+                    "#fff0b3"
+                    if self.pulse_highlighted
+                    else "#f28c00"
+                )
+                border_color = "#a64b00"
+                font_weight = "bold"
+                hover_rule = ""
+
+        elif self.execution_state == "pending":
+            background_color = "#d9dde2"
+            border_color = "#777d85"
+            font_weight = "normal"
+            hover_rule = ""
+
+        elif self.isChecked():
+            background_color = "#7fb7e6"
+            border_color = "#1f5f99"
+            font_weight = "bold"
+            hover_rule = ""
+
+        else:
+            background_color = "#f4f4f4"
+            border_color = "#777777"
+            font_weight = "normal"
+            hover_rule = """
                 QPushButton:hover {
                     background-color: #dcecff;
                 }
-                """)
+            """
+
+        self.setStyleSheet(
+            f"""
+            QPushButton {{
+                border-radius: 15px;
+                border: 2px solid {border_color};
+                background-color: {background_color};
+                font-weight: {font_weight};
+            }}
+
+            {hover_rule}
+            """
+        )
+
+    def set_execution_state(
+        self,
+        execution_state: str | None,
+    ) -> None:
+        valid_states = {
+            None,
+            "pending",
+            "current",
+            "completed",
+        }
+
+        if execution_state not in valid_states:
+            raise ValueError(
+                f"Invalid well execution state: {execution_state}"
+            )
+
+        self.execution_state = execution_state
+        self.update_style()
+
+    def set_pulse_highlighted(self, highlighted: bool) -> None:
+        if self.pulse_highlighted == highlighted:
+            return
+
+        self.pulse_highlighted = highlighted
+
+        if self.execution_state == "current":
+            self.update_style()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -95,7 +160,12 @@ class WellPlateWidget(QWidget):
         self.plate = plate
         self.well_buttons: dict[str, WellButton] = {}
         self.drag_target_state: bool | None = None
+        self.pulsing_well: str | None = None
+        self.pulse_phase = False
 
+        self.pulse_timer = QTimer(self)
+        self.pulse_timer.setInterval(500)
+        self.pulse_timer.timeout.connect(self._advance_pulse)        
         main_layout = QVBoxLayout(self)
 
         controls_layout = QGridLayout()
@@ -203,6 +273,110 @@ class WellPlateWidget(QWidget):
 
     def _finish_drag(self) -> None:
         self.drag_target_state = None
+
+    def set_current_well_pulsing(
+        self,
+        well_name: str | None,
+        pulsing: bool,
+    ) -> None:
+        normalized_well = (
+            self.plate.normalize_well_name(well_name)
+            if well_name is not None
+            else None
+        )
+
+        if (
+            pulsing
+            and normalized_well == self.pulsing_well
+            and self.pulse_timer.isActive()
+        ):
+            return
+
+        self.stop_execution_pulse()
+
+        if (
+            not pulsing
+            or normalized_well is None
+            or normalized_well not in self.well_buttons
+        ):
+            return
+
+        self.pulsing_well = normalized_well
+        self.pulse_phase = False
+        self.pulse_timer.start()
+
+    def stop_execution_pulse(self) -> None:
+        self.pulse_timer.stop()
+
+        if self.pulsing_well is not None:
+            button = self.well_buttons.get(self.pulsing_well)
+
+            if button is not None:
+                button.set_pulse_highlighted(False)
+
+        self.pulsing_well = None
+        self.pulse_phase = False
+
+    def _advance_pulse(self) -> None:
+        if self.pulsing_well is None:
+            self.stop_execution_pulse()
+            return
+
+        button = self.well_buttons.get(self.pulsing_well)
+
+        if button is None or button.execution_state != "current":
+            self.stop_execution_pulse()
+            return
+
+        self.pulse_phase = not self.pulse_phase
+        button.set_pulse_highlighted(self.pulse_phase)
+
+    def prepare_execution(
+        self,
+        well_names: Iterable[str],
+    ) -> None:
+        self.stop_execution_pulse()
+
+        execution_wells = {
+            self.plate.normalize_well_name(well_name)
+            for well_name in well_names
+        }
+
+        for well_name, button in self.well_buttons.items():
+            if well_name in execution_wells:
+                button.set_execution_state("pending")
+            else:
+                button.set_execution_state(None)
+
+    def update_execution_display(
+        self,
+        *,
+        current_well: str | None,
+        completed_wells: Iterable[str],
+    ) -> None:
+        normalized_completed = {
+            self.plate.normalize_well_name(well_name)
+            for well_name in completed_wells
+        }
+
+        normalized_current = (
+            self.plate.normalize_well_name(current_well)
+            if current_well is not None
+            else None
+        )
+
+        for well_name, button in self.well_buttons.items():
+            if well_name in normalized_completed:
+                button.set_execution_state("completed")
+            elif well_name == normalized_current:
+                button.set_execution_state("current")
+            elif button.execution_state is not None:
+                button.set_execution_state("pending")
+
+    def clear_execution_display(self) -> None:
+        self.stop_execution_pulse()
+        for button in self.well_buttons.values():
+            button.set_execution_state(None)        
 
     def get_selected_wells(self) -> list[str]:
         return [
