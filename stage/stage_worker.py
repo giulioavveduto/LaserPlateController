@@ -168,15 +168,15 @@ class StageWorker(QObject):
             return
 
         self.operation_in_progress = True
+
+        if self.position_timer is not None:
+            self.position_timer.stop()
+
         self.homing_started.emit()
 
         try:
-            self.stage.home(wait_seconds=20)
-
+            self.stage.home(wait_seconds=40)
             x_mm, y_mm = self.stage.get_position_mm()
-
-            if self.position_timer is not None:
-                self.position_timer.start()
 
             self.position_updated.emit(x_mm, y_mm)
             self.homing_finished.emit(x_mm, y_mm)
@@ -186,6 +186,9 @@ class StageWorker(QObject):
 
         finally:
             self.operation_in_progress = False
+
+            if self.position_timer is not None and self.stage is not None:
+                self.position_timer.start()
 
     def _close_stage_safely(self) -> None:
         if self.stage is not None:
