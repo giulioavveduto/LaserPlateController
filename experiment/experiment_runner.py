@@ -11,7 +11,9 @@ class ExperimentState(Enum):
     IDLE = auto()
     MOVING = auto()
     EXPOSING = auto()
+    PAUSED = auto()
     HOMING = auto()
+    STOPPING = auto()
     COMPLETED = auto()
     STOPPED = auto()
     ERROR = auto()
@@ -26,6 +28,7 @@ class ExperimentRunner(QObject):
     home_requested = Signal()
 
     experiment_finished = Signal()
+    experiment_stopped = Signal()
     error_occurred = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -38,6 +41,8 @@ class ExperimentRunner(QObject):
         self.plate_type = ""
 
         self.exposure_remaining_s = 0.0
+        self.pause_requested = False
+        self.paused_before_exposure = False
 
         self.exposure_timer = QTimer(self)
         self.exposure_timer.setInterval(100)
@@ -48,8 +53,14 @@ class ExperimentRunner(QObject):
         return self.state in {
             ExperimentState.MOVING,
             ExperimentState.EXPOSING,
+            ExperimentState.PAUSED,
             ExperimentState.HOMING,
+            ExperimentState.STOPPING,
         }
+
+    @property
+    def is_paused(self) -> bool:
+        return self.state is ExperimentState.PAUSED
 
     @property
     def current_well(self) -> str | None:
@@ -65,15 +76,15 @@ class ExperimentRunner(QObject):
             len(self.wells) - self.current_well_index - 1,
         )
 
-        current_remaining = (
-            self.exposure_remaining_s
-            if self.state is ExperimentState.EXPOSING
-            else (
-                self.exposure_time_s
-                if self.current_well is not None
-                else 0.0
-            )
-        )
+        if self.current_well is None:
+            current_remaining = 0.0
+        elif self.state in {
+            ExperimentState.EXPOSING,
+            ExperimentState.PAUSED,
+        }:
+            current_remaining = self.exposure_remaining_s
+        else:
+            current_remaining = self.exposure_time_s
 
         return max(
             0.0,
@@ -97,12 +108,13 @@ class ExperimentRunner(QObject):
 
         self.exposure_timer.stop()
 
-        # Snapshot all execution-relevant values.
         self.plate_type = protocol.plate_type
         self.wells = list(protocol.selected_wells)
         self.exposure_time_s = protocol.common_exposure_time_s
         self.current_well_index = 0
         self.exposure_remaining_s = self.exposure_time_s
+        self.pause_requested = False
+        self.paused_before_exposure = False
 
         current_well = self.current_well
 
@@ -115,10 +127,26 @@ class ExperimentRunner(QObject):
         self.move_requested.emit(current_well)
 
     def notify_movement_finished(self) -> None:
+        if self.state is ExperimentState.STOPPING:
+            self.home_requested.emit()
+            return
+
         if self.state is not ExperimentState.MOVING:
             return
 
         self.exposure_remaining_s = self.exposure_time_s
+
+        if self.pause_requested:
+            self.pause_requested = False
+            self.paused_before_exposure = True
+            self.set_state(ExperimentState.PAUSED)
+            self.remaining_time_changed.emit(self.remaining_time_s)
+            return
+
+        self._start_exposure()
+
+    def _start_exposure(self) -> None:
+        self.paused_before_exposure = False
         self.set_state(ExperimentState.EXPOSING)
         self.remaining_time_changed.emit(self.remaining_time_s)
         self.exposure_timer.start()
@@ -159,7 +187,61 @@ class ExperimentRunner(QObject):
         self.remaining_time_changed.emit(self.remaining_time_s)
         self.move_requested.emit(current_well)
 
+    def pause(self) -> None:
+        if self.state is ExperimentState.MOVING:
+            # The active movement cannot be interrupted safely.
+            # Pause immediately after arrival, before exposure.
+            self.pause_requested = True
+            return
+
+        if self.state is not ExperimentState.EXPOSING:
+            return
+
+        self.exposure_timer.stop()
+        self.paused_before_exposure = False
+        self.set_state(ExperimentState.PAUSED)
+        self.remaining_time_changed.emit(self.remaining_time_s)
+
+    def resume(self) -> None:
+        if self.state is not ExperimentState.PAUSED:
+            return
+
+        self.pause_requested = False
+        self._start_exposure()
+
+    def request_stop(self) -> None:
+        previous_state = self.state
+
+        if previous_state not in {
+            ExperimentState.MOVING,
+            ExperimentState.EXPOSING,
+            ExperimentState.PAUSED,
+            ExperimentState.HOMING,
+        }:
+            return
+
+        self.exposure_timer.stop()
+        self.pause_requested = False
+        self.paused_before_exposure = False
+        self.set_state(ExperimentState.STOPPING)
+        self.remaining_time_changed.emit(0.0)
+
+        # An active movement or homing operation must finish safely.
+        if previous_state in {
+            ExperimentState.MOVING,
+            ExperimentState.HOMING,
+        }:
+            return
+
+        self.home_requested.emit()
+        
     def notify_homing_finished(self) -> None:
+        if self.state is ExperimentState.STOPPING:
+            self.set_state(ExperimentState.STOPPED)
+            self.remaining_time_changed.emit(0.0)
+            self.experiment_stopped.emit()
+            return
+
         if self.state is not ExperimentState.HOMING:
             return
 
@@ -167,15 +249,8 @@ class ExperimentRunner(QObject):
         self.remaining_time_changed.emit(0.0)
         self.experiment_finished.emit()
 
-    def stop(self) -> None:
-        if not self.is_running:
-            return
-
-        self.exposure_timer.stop()
-        self.set_state(ExperimentState.STOPPED)
-        self.remaining_time_changed.emit(0.0)
-
     def fail(self, message: str) -> None:
         self.exposure_timer.stop()
+        self.pause_requested = False
         self.set_state(ExperimentState.ERROR)
         self.error_occurred.emit(message)

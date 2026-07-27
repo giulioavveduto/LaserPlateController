@@ -90,12 +90,47 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.create_future_devices_section())
 
+        experiment_controls_layout = QHBoxLayout()
+
         self.start_button = QPushButton("START EXPERIMENT")
         self.start_button.setEnabled(False)
         self.start_button.setMinimumHeight(55)
-        self.start_button.setStyleSheet("font-size: 18px; font-weight: bold;")
+        self.start_button.setStyleSheet(
+            "font-size: 18px; font-weight: bold;"
+        )
         self.start_button.clicked.connect(self.start_experiment)
-        main_layout.addWidget(self.start_button)
+
+        self.pause_button = QPushButton("PAUSE")
+        self.pause_button.setEnabled(False)
+        self.pause_button.setMinimumHeight(55)
+        self.pause_button.clicked.connect(
+            self.pause_or_resume_experiment
+        )
+
+        self.stop_button = QPushButton("STOP")
+        self.stop_button.setEnabled(False)
+        self.stop_button.setMinimumHeight(55)
+        self.stop_button.setStyleSheet(
+            "font-size: 16px; font-weight: bold; color: #a12626;"
+        )
+        self.stop_button.clicked.connect(
+            self.stop_experiment
+        )
+
+        experiment_controls_layout.addWidget(
+            self.start_button,
+            stretch=2,
+        )
+        experiment_controls_layout.addWidget(
+            self.pause_button,
+            stretch=1,
+        )
+        experiment_controls_layout.addWidget(
+            self.stop_button,
+            stretch=1,
+        )
+
+        main_layout.addLayout(experiment_controls_layout)
         self.experiment_runner.state_changed.connect(self.on_experiment_state_changed)
         self.experiment_runner.current_well_changed.connect(
             self.on_current_well_changed
@@ -113,7 +148,9 @@ class MainWindow(QMainWindow):
         self.experiment_runner.experiment_finished.connect(
             self.on_experiment_finished
         )
-
+        self.experiment_runner.experiment_stopped.connect(
+            self.on_experiment_stopped
+        )
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Application ready")
@@ -607,6 +644,100 @@ class MainWindow(QMainWindow):
         self.update_start_button_state()
         self.statusBar().showMessage("Automatic experiment started")
 
+    def pause_or_resume_experiment(self) -> None:
+        if self.experiment_runner.is_paused:
+            self.experiment_runner.resume()
+            return
+
+        self.experiment_runner.pause()
+
+        if self.experiment_runner.pause_requested:
+            self.pause_button.setText("PAUSE REQUESTED")
+            self.pause_button.setEnabled(False)
+            self.statusBar().showMessage(
+                "Pause requested — waiting for movement to finish"
+            )
+
+    def stop_experiment(self) -> None:
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.statusBar().showMessage(
+            "Stopping experiment — stage will return home"
+        )
+        self.experiment_runner.request_stop()
+
+    def set_experiment_inputs_locked(self, locked: bool) -> None:
+        enabled = not locked
+
+        self.experiment_designer.setEnabled(enabled)
+        self.plate_combo.setEnabled(enabled)
+
+        if self.current_plate_widget is not None:
+            self.current_plate_widget.setEnabled(enabled)
+
+        self.open_action.setEnabled(enabled)
+        self.save_action.setEnabled(enabled)
+        self.save_as_action.setEnabled(enabled)
+
+        self.stage_mode_combo.setEnabled(
+            enabled and not self.stage_connected
+        )
+        self.connect_button.setEnabled(
+            enabled and not self.stage_connected
+        )
+        self.disconnect_button.setEnabled(
+            enabled and self.stage_connected and not self.stage_busy
+        )
+
+        if locked:
+            self.set_stage_controls_enabled(False)
+            self.calibrate_button.setEnabled(False)
+            self.navigate_to_well_button.setEnabled(False)
+        elif self.stage_connected:
+            if self.stage_homed and not self.stage_busy:
+                self.set_stage_controls_enabled(True)
+                self.calibrate_button.setEnabled(True)
+            elif not self.stage_homed and not self.stage_busy:
+                self.home_button.setEnabled(True)
+
+            self.update_navigation_button_state()
+
+    def update_experiment_controls(self) -> None:
+        state = self.experiment_runner.state
+        active = self.experiment_runner.is_running
+
+        self.set_experiment_inputs_locked(active)
+
+        self.pause_button.setText(
+            "RESUME"
+            if state is ExperimentState.PAUSED
+            else "PAUSE"
+        )
+        self.pause_button.setEnabled(
+            state in {
+                ExperimentState.MOVING,
+                ExperimentState.EXPOSING,
+                ExperimentState.PAUSED,
+            }
+        )
+        self.stop_button.setEnabled(
+            state in {
+                ExperimentState.MOVING,
+                ExperimentState.EXPOSING,
+                ExperimentState.PAUSED,
+                ExperimentState.HOMING,
+            }
+        )
+
+        self.update_start_button_state()
+
+    def on_experiment_stopped(self) -> None:
+        self.statusBar().showMessage(
+            "Experiment stopped — stage homed",
+            10000,
+        )
+        self.update_experiment_controls()
+
     def on_experiment_state_changed(
         self,
         state: ExperimentState,
@@ -614,7 +745,7 @@ class MainWindow(QMainWindow):
         self.experiment_designer.experiment_state_label.setText(
             state.name.replace("_", " ").title()
         )
-        self.update_start_button_state()
+        self.update_experiment_controls()
 
     def on_experiment_move_requested(self, well_name: str) -> None:
         try:
@@ -1042,15 +1173,21 @@ class MainWindow(QMainWindow):
         y_mm: float,
     ) -> None:
         self.stage_busy = False
-        self.set_stage_controls_enabled(True)
+        if not self.experiment_runner.is_running:
+            self.set_stage_controls_enabled(True)
 
         self.update_position_display(x_mm, y_mm)
         self.statusBar().showMessage("Movement complete")
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
-        if self.experiment_runner.state is ExperimentState.MOVING:
+        if self.experiment_runner.state in {
+            ExperimentState.MOVING,
+            ExperimentState.STOPPING,
+        }:
             self.experiment_runner.notify_movement_finished()
+
+        self.update_experiment_controls()
 
     def on_homing_started(self) -> None:
         self.stage_busy = True
@@ -1072,17 +1209,22 @@ class MainWindow(QMainWindow):
             True,
         )
         self.stage_busy = False
-        self.set_stage_controls_enabled(True)
-        self.calibrate_button.setEnabled(True)
-
+        if not self.experiment_runner.is_running:
+            self.set_stage_controls_enabled(True)
+            self.calibrate_button.setEnabled(True)
         self.update_position_display(x_mm, y_mm)
         self.statusBar().showMessage("Homing complete")
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
-        if self.experiment_runner.state is ExperimentState.HOMING:
+        if self.experiment_runner.state in {
+            ExperimentState.HOMING,
+            ExperimentState.STOPPING,
+        }:
             self.experiment_runner.notify_homing_finished()
 
+        self.update_experiment_controls()
+        
     def show_stage_error(self, message: str) -> None:
         self.stage_busy = False
 
