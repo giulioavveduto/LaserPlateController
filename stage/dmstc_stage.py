@@ -1,5 +1,3 @@
-import time
-import serial
 import re
 import time
 import serial
@@ -44,11 +42,10 @@ class DMSTCStage:
             last_reply = reply
 
             if re.fullmatch(
-                rf"{re.escape(command)}[+-]?\d+",
+                rf"{re.escape(command)}(?:[+-]?\d+|\?{{3}})",
                 reply,
             ):
                 return reply
-
             time.sleep(retry_delay)
 
         raise RuntimeError(
@@ -169,11 +166,51 @@ class DMSTCStage:
         x_units: int,
         y_units: int,
         wait_seconds: float = 2,
+        timeout_seconds: float = 60,
+        poll_interval_seconds: float = 0.2,
+        tolerance_units: int = 2,
+        required_stable_readings: int = 2,
     ) -> None:
         command = f"10002{x_units} {y_units}\r"
+
         self.ser.reset_input_buffer()
+        self.ser.reset_output_buffer()
         self.ser.write(command.encode())
+        self.ser.flush()
+
+        # Give the controller time to start the movement before polling.
         time.sleep(wait_seconds)
+
+        deadline = time.monotonic() + timeout_seconds
+        stable_readings = 0
+        last_x = None
+        last_y = None
+
+        while time.monotonic() < deadline:
+            actual_x, actual_y = self.get_position_units()
+            last_x, last_y = actual_x, actual_y
+
+            target_reached = (
+                abs(actual_x - x_units) <= tolerance_units
+                and abs(actual_y - y_units) <= tolerance_units
+            )
+
+            if target_reached:
+                stable_readings += 1
+
+                if stable_readings >= required_stable_readings:
+                    return
+            else:
+                stable_readings = 0
+
+            time.sleep(poll_interval_seconds)
+
+        raise TimeoutError(
+            "Stage did not reach the requested position within "
+            f"{timeout_seconds:.1f} s. "
+            f"Target: X={x_units}, Y={y_units}; "
+            f"last position: X={last_x}, Y={last_y}."
+        )
 
     def move_absolute_mm(
         self,
@@ -201,11 +238,6 @@ class DMSTCStage:
         x_units = round(x_controller_mm * self.UNITS_PER_MM)
         y_units = round(y_controller_mm * self.UNITS_PER_MM)
 
-        self.move_absolute_units(
-            x_units,
-            y_units,
-            wait_seconds,
-        )
         self.move_absolute_units(
             x_units,
             y_units,

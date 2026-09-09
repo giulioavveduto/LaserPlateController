@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QMetaObject, QThread, Qt, Signal
-from PySide6.QtGui import QAction, QKeySequence,QWheelEvent
+from PySide6.QtGui import QAction, QKeySequence, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -35,12 +35,14 @@ from experiment.experiment_designer_widget import ExperimentDesignerWidget
 from experiment.protocol_io import load_protocol, save_protocol
 from experiment.experiment_runner import ExperimentRunner, ExperimentState
 
+
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
             super().wheelEvent(event)
         else:
             event.ignore()
+
 
 class MainWindow(QMainWindow):
     request_connect_stage = Signal()
@@ -102,17 +104,13 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton("START EXPERIMENT")
         self.start_button.setEnabled(False)
         self.start_button.setMinimumHeight(55)
-        self.start_button.setStyleSheet(
-            "font-size: 18px; font-weight: bold;"
-        )
+        self.start_button.setStyleSheet("font-size: 18px; font-weight: bold;")
         self.start_button.clicked.connect(self.start_experiment)
 
         self.pause_button = QPushButton("PAUSE")
         self.pause_button.setEnabled(False)
         self.pause_button.setMinimumHeight(55)
-        self.pause_button.clicked.connect(
-            self.pause_or_resume_experiment
-        )
+        self.pause_button.clicked.connect(self.pause_or_resume_experiment)
 
         self.stop_button = QPushButton("STOP")
         self.stop_button.setEnabled(False)
@@ -120,9 +118,7 @@ class MainWindow(QMainWindow):
         self.stop_button.setStyleSheet(
             "font-size: 16px; font-weight: bold; color: #a12626;"
         )
-        self.stop_button.clicked.connect(
-            self.stop_experiment
-        )
+        self.stop_button.clicked.connect(self.stop_experiment)
 
         experiment_controls_layout.addWidget(
             self.start_button,
@@ -146,18 +142,10 @@ class MainWindow(QMainWindow):
             self.on_remaining_time_changed
         )
         self.experiment_runner.error_occurred.connect(self.on_experiment_error)
-        self.experiment_runner.move_requested.connect(
-            self.on_experiment_move_requested
-        )
-        self.experiment_runner.home_requested.connect(
-            self.request_home_stage.emit
-        )
-        self.experiment_runner.experiment_finished.connect(
-            self.on_experiment_finished
-        )
-        self.experiment_runner.experiment_stopped.connect(
-            self.on_experiment_stopped
-        )
+        self.experiment_runner.move_requested.connect(self.on_experiment_move_requested)
+        self.experiment_runner.home_requested.connect(self.request_home_stage.emit)
+        self.experiment_runner.experiment_finished.connect(self.on_experiment_finished)
+        self.experiment_runner.experiment_stopped.connect(self.on_experiment_stopped)
 
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Application ready")
@@ -480,7 +468,7 @@ class MainWindow(QMainWindow):
 
         absolute_layout.addWidget(QLabel("X:"), 0, 0)
 
-        self.absolute_x_spinbox = FocusWheelDoubleSpinBox()        
+        self.absolute_x_spinbox = FocusWheelDoubleSpinBox()
         self.absolute_x_spinbox.setRange(0.0, 80.0)
         self.absolute_x_spinbox.setDecimals(3)
         self.absolute_x_spinbox.setSuffix(" mm")
@@ -497,7 +485,7 @@ class MainWindow(QMainWindow):
         self.absolute_y_spinbox.setMinimumWidth(90)
         self.absolute_y_spinbox.setMaximumWidth(125)
         absolute_layout.addWidget(self.absolute_y_spinbox, 1, 1)
-        
+
         self.absolute_go_button = QPushButton("GO TO POSITION")
         self.absolute_go_button.clicked.connect(self.request_absolute_position)
         absolute_layout.addWidget(
@@ -687,25 +675,17 @@ class MainWindow(QMainWindow):
     def stop_experiment(self) -> None:
         runner = self.experiment_runner
 
-        exposure_has_started = (
-            runner.state is ExperimentState.EXPOSING
-            or (
-                runner.state is ExperimentState.PAUSED
-                and not runner.paused_before_exposure
-            )
+        exposure_has_started = runner.state is ExperimentState.EXPOSING or (
+            runner.state is ExperimentState.PAUSED and not runner.paused_before_exposure
         )
 
         self._stopped_interrupted_well = (
-            runner.current_well
-            if exposure_has_started
-            else None
+            runner.current_well if exposure_has_started else None
         )
 
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
-        self.statusBar().showMessage(
-            "Stopping experiment — stage will return home"
-        )
+        self.statusBar().showMessage("Stopping experiment — stage will return home")
         runner.request_stop()
 
     def set_experiment_inputs_locked(self, locked: bool) -> None:
@@ -721,12 +701,8 @@ class MainWindow(QMainWindow):
         self.save_action.setEnabled(enabled)
         self.save_as_action.setEnabled(enabled)
 
-        self.stage_mode_combo.setEnabled(
-            enabled and not self.stage_connected
-        )
-        self.connect_button.setEnabled(
-            enabled and not self.stage_connected
-        )
+        self.stage_mode_combo.setEnabled(enabled and not self.stage_connected)
+        self.connect_button.setEnabled(enabled and not self.stage_connected)
         self.disconnect_button.setEnabled(
             enabled and self.stage_connected and not self.stage_busy
         )
@@ -751,19 +727,19 @@ class MainWindow(QMainWindow):
         self.set_experiment_inputs_locked(active)
 
         self.pause_button.setText(
-            "RESUME"
-            if state is ExperimentState.PAUSED
-            else "PAUSE"
+            "RESUME" if state is ExperimentState.PAUSED else "PAUSE"
         )
         self.pause_button.setEnabled(
-            state in {
+            state
+            in {
                 ExperimentState.MOVING,
                 ExperimentState.EXPOSING,
                 ExperimentState.PAUSED,
             }
         )
         self.stop_button.setEnabled(
-            state in {
+            state
+            in {
                 ExperimentState.MOVING,
                 ExperimentState.EXPOSING,
                 ExperimentState.PAUSED,
@@ -781,7 +757,6 @@ class MainWindow(QMainWindow):
         )
         self.update_experiment_controls()
 
-        
     def update_experiment_dashboard(self) -> None:
         runner = self.experiment_runner
         total_wells = len(runner.wells)
@@ -796,23 +771,15 @@ class MainWindow(QMainWindow):
 
         current_exposure_remaining_s = 0.0
 
-        if (
-            runner.current_well is not None
-            and runner.state
-            in {
-                ExperimentState.MOVING,
-                ExperimentState.EXPOSING,
-                ExperimentState.PAUSED,
-            }
-        ):
-            current_exposure_remaining_s = (
-                runner.exposure_remaining_s
-            )
+        if runner.current_well is not None and runner.state in {
+            ExperimentState.MOVING,
+            ExperimentState.EXPOSING,
+            ExperimentState.PAUSED,
+        }:
+            current_exposure_remaining_s = runner.exposure_remaining_s
 
         if self.current_plate_widget is not None:
-            completed_well_names = runner.wells[
-                :max(0, runner.current_well_index)
-            ]
+            completed_well_names = runner.wells[: max(0, runner.current_well_index)]
 
             if runner.state is ExperimentState.COMPLETED:
                 completed_well_names = list(runner.wells)
@@ -852,9 +819,7 @@ class MainWindow(QMainWindow):
             current_index=runner.current_well_index,
             total_wells=total_wells,
             completed_wells=completed_wells,
-            current_exposure_remaining_s=(
-                current_exposure_remaining_s
-            ),
+            current_exposure_remaining_s=(current_exposure_remaining_s),
             total_remaining_s=runner.remaining_time_s,
         )
 
@@ -869,9 +834,7 @@ class MainWindow(QMainWindow):
         try:
             plate = PlateGeometry(self.experiment_runner.plate_type)
 
-            relative_x_mm, relative_y_mm = (
-                plate.get_relative_position(well_name)
-            )
+            relative_x_mm, relative_y_mm = plate.get_relative_position(well_name)
 
             absolute_x_mm, absolute_y_mm = (
                 self.calibration_manager.get_absolute_well_position(
@@ -1342,9 +1305,14 @@ class MainWindow(QMainWindow):
             self.experiment_runner.notify_homing_finished()
 
         self.update_experiment_controls()
-        
+
     def show_stage_error(self, message: str) -> None:
         self.stage_busy = False
+
+        experiment_was_running = self.experiment_runner.is_running
+
+        if experiment_was_running:
+            self.experiment_runner.fail(message)
 
         if self.stage_connected and self.stage_homed:
             self.set_stage_controls_enabled(True)
@@ -1353,11 +1321,13 @@ class MainWindow(QMainWindow):
             self.home_button.setEnabled(True)
             self.calibrate_button.setEnabled(False)
 
-        QMessageBox.critical(
-            self,
-            "Stage error",
-            message,
-        )
+        if not experiment_was_running:
+            QMessageBox.critical(
+                self,
+                "Stage error",
+                message,
+            )
+
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
