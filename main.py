@@ -34,6 +34,8 @@ from experiment.experiment_protocol import ExperimentProtocol
 from experiment.experiment_designer_widget import ExperimentDesignerWidget
 from experiment.protocol_io import load_protocol, save_protocol
 from experiment.experiment_runner import ExperimentRunner, ExperimentState
+from laser.laser_control_widget import LaserControlWidget
+from laser.laser_worker import LaserWorker
 
 
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
@@ -52,6 +54,11 @@ class MainWindow(QMainWindow):
     request_move_stage = Signal(float, float)
     request_home_stage = Signal()
     request_absolute_move = Signal(float, float)
+    request_laser_mode = Signal(str)
+    request_connect_laser = Signal()
+    request_disconnect_laser = Signal()
+    request_laser_current = Signal(int)
+    request_laser_emission = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -61,6 +68,10 @@ class MainWindow(QMainWindow):
         self.stage_busy = False
         self.current_x_mm: float | None = None
         self.current_y_mm: float | None = None
+
+        self.laser_connected = False
+        self.laser_emission_enabled = False
+        self.laser_current_percent: int | None = None
 
         self.calibration_manager = CalibrationManager()
         self.experiment_protocol = ExperimentProtocol(plate_type="96-well plate")
@@ -157,7 +168,7 @@ class MainWindow(QMainWindow):
         )
         self.set_device_status(
             self.laser_status_label,
-            "Laser: not configured",
+            "Laser: disconnected",
             False,
         )
         self.set_device_status(
@@ -168,6 +179,42 @@ class MainWindow(QMainWindow):
         self.create_menu_bar()
 
         self.create_stage_thread()
+
+        self.create_laser_thread()
+
+    def create_laser_thread(self) -> None:
+        self.laser_thread = QThread(self)
+        self.laser_worker = LaserWorker()
+        self.laser_worker.moveToThread(self.laser_thread)
+
+        self.laser_thread.started.connect(self.laser_worker.initialize)
+
+        self.request_laser_mode.connect(self.laser_worker.set_laser_mode)
+        self.request_connect_laser.connect(self.laser_worker.connect_laser)
+        self.request_disconnect_laser.connect(self.laser_worker.disconnect_laser)
+        self.request_laser_current.connect(self.laser_worker.set_current_percent)
+        self.request_laser_emission.connect(self.laser_worker.set_emission_enabled)
+
+        self.laser_control_widget.mode_changed.connect(self.request_laser_mode.emit)
+        self.laser_control_widget.connect_requested.connect(
+            self.request_connect_laser.emit
+        )
+        self.laser_control_widget.disconnect_requested.connect(
+            self.request_disconnect_laser.emit
+        )
+        self.laser_control_widget.current_requested.connect(
+            self.request_laser_current.emit
+        )
+        self.laser_control_widget.emission_requested.connect(
+            self.request_laser_emission.emit
+        )
+
+        self.laser_worker.connected.connect(self.on_laser_connected)
+        self.laser_worker.disconnected.connect(self.on_laser_disconnected)
+        self.laser_worker.status_updated.connect(self.on_laser_status_updated)
+        self.laser_worker.error_occurred.connect(self.show_laser_error)
+
+        self.laser_thread.start()
 
     def create_menu_bar(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
@@ -881,6 +928,10 @@ class MainWindow(QMainWindow):
     def clear_plate_widget(self) -> None:
         while self.plate_map_layout.count():
             item = self.plate_map_layout.takeAt(0)
+
+            if item is None:
+                continue
+
             widget = item.widget()
 
             if widget is not None:
@@ -1061,14 +1112,10 @@ class MainWindow(QMainWindow):
         )
 
     def create_future_devices_section(self) -> QGroupBox:
-        group = QGroupBox("Laser and incubator — future modules")
+        group = QGroupBox("Laser and incubator")
         layout = QHBoxLayout(group)
 
-        laser_box = QGroupBox("Laser")
-        laser_layout = QVBoxLayout(laser_box)
-        laser_layout.addWidget(QLabel("Emission control: unavailable"))
-        laser_layout.addWidget(QLabel("Power control: unavailable"))
-        laser_layout.addWidget(QLabel("Preheat: unavailable"))
+        self.laser_control_widget = LaserControlWidget()
 
         incubator_box = QGroupBox("Incubator")
         incubator_layout = QVBoxLayout(incubator_box)
@@ -1076,7 +1123,10 @@ class MainWindow(QMainWindow):
         incubator_layout.addWidget(QLabel("Humidity: unavailable"))
         incubator_layout.addWidget(QLabel("CO₂: unavailable"))
 
-        layout.addWidget(laser_box)
+        layout.addWidget(
+            self.laser_control_widget,
+            stretch=2,
+        )
         layout.addWidget(incubator_box)
 
         return group
@@ -1356,7 +1406,96 @@ class MainWindow(QMainWindow):
         self.update_navigation_button_state()
         self.update_start_button_state()
 
+    def on_laser_connected(
+        self,
+        emission_enabled: bool,
+        current_percent: int,
+    ) -> None:
+        self.laser_connected = True
+        self.laser_control_widget.set_connected(True)
+        self.on_laser_status_updated(
+            emission_enabled,
+            current_percent,
+        )
+        self.statusBar().showMessage(
+            "Laser connected — emission command forced OFF",
+            5000,
+        )
+
+    def on_laser_disconnected(self) -> None:
+        self.laser_connected = False
+        self.laser_emission_enabled = False
+        self.laser_current_percent = None
+
+        self.laser_control_widget.set_connected(False)
+        self.set_device_status(
+            self.laser_status_label,
+            "Laser: disconnected",
+            False,
+        )
+        self.statusBar().showMessage(
+            "Laser disconnected",
+            5000,
+        )
+
+    def on_laser_status_updated(
+        self,
+        emission_enabled: bool,
+        current_percent: int,
+    ) -> None:
+        self.laser_connected = True
+        self.laser_emission_enabled = emission_enabled
+        self.laser_current_percent = current_percent
+
+        self.laser_control_widget.set_connected(True)
+        self.laser_control_widget.update_status(
+            emission_enabled,
+            current_percent,
+        )
+
+        emission_text = "ON" if emission_enabled else "OFF"
+        self.set_device_status(
+            self.laser_status_label,
+            (
+                "Laser: connected — emission command "
+                f"{emission_text}, {current_percent}%"
+            ),
+            True,
+        )
+
+    def show_laser_error(self, message: str) -> None:
+        if not self.laser_connected:
+            self.laser_control_widget.set_connected(False)
+            self.set_device_status(
+                self.laser_status_label,
+                "Laser: connection error",
+                False,
+            )
+
+        QMessageBox.critical(
+            self,
+            "Laser error",
+            message,
+        )
+
     def closeEvent(self, event) -> None:
+
+        if self.laser_thread.isRunning():
+            QMetaObject.invokeMethod(
+                self.laser_worker,
+                "disconnect_laser",
+                Qt.ConnectionType.BlockingQueuedConnection,
+            )
+
+            QMetaObject.invokeMethod(
+                self.laser_worker,
+                "deleteLater",
+                Qt.ConnectionType.QueuedConnection,
+            )
+
+            self.laser_thread.quit()
+            self.laser_thread.wait()
+
         if self.stage_thread.isRunning():
             QMetaObject.invokeMethod(
                 self.stage_worker,

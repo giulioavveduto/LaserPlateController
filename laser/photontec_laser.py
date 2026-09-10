@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import serial
+import time
 
 
 class PhotontecLaser:
@@ -114,26 +115,45 @@ class PhotontecLaser:
         channel: int,
         command: int,
         value: int = 0,
+        attempts: int = 3,
     ) -> bytes:
         request = self._build_request(channel, command, value)
         response_size = 8 if command == self.COMMAND_READ else 9
+        last_error: Exception | None = None
 
-        self.ser.reset_input_buffer()
-        self.ser.write(request)
-        self.ser.flush()
+        for attempt in range(attempts):
+            if attempt > 0:
+                time.sleep(0.2)
 
-        reply = self._read_exactly(response_size)
-        self._validate_reply(
-            reply,
-            expected_channel=channel,
-            expected_command=command,
-            expected_size=response_size,
-        )
+            try:
+                self.ser.reset_input_buffer()
+                self.ser.write(request)
+                self.ser.flush()
 
-        if command == self.COMMAND_WRITE and reply[4:7] != b"OK!":
-            raise RuntimeError(f"Laser rejected the command: {reply.hex(' ')}.")
+                # Allow the controller to process the binary request.
+                time.sleep(0.05)
 
-        return reply
+                reply = self._read_exactly(response_size)
+                self._validate_reply(
+                    reply,
+                    expected_channel=channel,
+                    expected_command=command,
+                    expected_size=response_size,
+                )
+
+                if command == self.COMMAND_WRITE and reply[4:7] != b"OK!":
+                    raise RuntimeError(f"Laser rejected the command: {reply.hex(' ')}.")
+
+                # Prevent the next request from arriving too quickly.
+                time.sleep(0.15)
+                return reply
+
+            except (RuntimeError, serial.SerialException) as exc:
+                last_error = exc
+
+        raise RuntimeError(
+            f"Laser communication failed after {attempts} attempts: " f"{last_error}"
+        ) from last_error
 
     def get_emission_enabled(self) -> bool:
         reply = self._exchange(
