@@ -36,6 +36,7 @@ class ExperimentRunner(QObject):
 
         self.state = ExperimentState.IDLE
         self.wells: list[str] = []
+        self.exposure_times_s: list[float] = []
         self.current_well_index = -1
         self.exposure_time_s = 0.0
         self.plate_type = ""
@@ -70,26 +71,32 @@ class ExperimentRunner(QObject):
         return None
 
     @property
+    def current_exposure_time_s(self) -> float:
+        if 0 <= self.current_well_index < len(self.exposure_times_s):
+            return self.exposure_times_s[self.current_well_index]
+
+        return 0.0
+
+    @property
     def remaining_time_s(self) -> float:
-        remaining_after_current = max(
-            0,
-            len(self.wells) - self.current_well_index - 1,
+        if self.current_well is None:
+            return 0.0
+
+        remaining_after_current = sum(
+            self.exposure_times_s[self.current_well_index + 1 :]
         )
 
-        if self.current_well is None:
-            current_remaining = 0.0
-        elif self.state in {
+        if self.state in {
             ExperimentState.EXPOSING,
             ExperimentState.PAUSED,
         }:
             current_remaining = self.exposure_remaining_s
         else:
-            current_remaining = self.exposure_time_s
+            current_remaining = self.current_exposure_time_s
 
         return max(
             0.0,
-            current_remaining
-            + remaining_after_current * self.exposure_time_s,
+            current_remaining + remaining_after_current,
         )
 
     def set_state(self, state: ExperimentState) -> None:
@@ -110,8 +117,11 @@ class ExperimentRunner(QObject):
 
         self.plate_type = protocol.plate_type
         self.wells = list(protocol.selected_wells)
-        self.exposure_time_s = protocol.common_exposure_time_s
+        self.exposure_times_s = [
+            protocol.exposure_time_for(well_name) for well_name in self.wells
+        ]
         self.current_well_index = 0
+        self.exposure_time_s = self.current_exposure_time_s
         self.exposure_remaining_s = self.exposure_time_s
         self.pause_requested = False
         self.paused_before_exposure = False
@@ -181,6 +191,7 @@ class ExperimentRunner(QObject):
             self.fail("Could not determine the next well.")
             return
 
+        self.exposure_time_s = self.current_exposure_time_s
         self.exposure_remaining_s = self.exposure_time_s
         self.current_well_changed.emit(current_well)
         self.set_state(ExperimentState.MOVING)
@@ -234,7 +245,7 @@ class ExperimentRunner(QObject):
             return
 
         self.home_requested.emit()
-        
+
     def notify_homing_finished(self) -> None:
         if self.state is ExperimentState.STOPPING:
             self.set_state(ExperimentState.STOPPED)

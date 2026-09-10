@@ -36,6 +36,7 @@ from experiment.protocol_io import load_protocol, save_protocol
 from experiment.experiment_runner import ExperimentRunner, ExperimentState
 from laser.laser_control_widget import LaserControlWidget
 from laser.laser_worker import LaserWorker
+from copy import deepcopy
 
 
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
@@ -337,6 +338,12 @@ class MainWindow(QMainWindow):
         self.experiment_protocol.selected_wells = list(loaded_protocol.selected_wells)
         self.experiment_protocol.common_exposure_time_s = (
             loaded_protocol.common_exposure_time_s
+        )
+        self.experiment_protocol.default_laser_setpoint = deepcopy(
+            loaded_protocol.default_laser_setpoint
+        )
+        self.experiment_protocol.well_treatments = deepcopy(
+            loaded_protocol.well_treatments
         )
 
         self.plate_combo.setCurrentText(loaded_protocol.plate_type)
