@@ -27,7 +27,7 @@ class LaserWorker(QObject):
     def initialize(self) -> None:
         """Called once after the worker is moved to its thread."""
         self.status_timer = QTimer(self)
-        self.status_timer.setInterval(1000)
+        self.status_timer.setInterval(2000)
         self.status_timer.timeout.connect(self.read_status)
 
     @Slot(str)
