@@ -4,7 +4,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
-    QFormLayout,
+    QGridLayout,
     QGroupBox,
     QLabel,
     QProgressBar,
@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (
 
 from experiment.experiment_protocol import ExperimentProtocol
 
+
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
             super().wheelEvent(event)
         else:
             event.ignore()
+
 
 class ExperimentDesignerWidget(QWidget):
     protocol_changed = Signal()
@@ -36,22 +38,8 @@ class ExperimentDesignerWidget(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        group = QGroupBox("Experiment Designer")
-        form_layout = QFormLayout(group)
-
-        self.exposure_time_spinbox = FocusWheelDoubleSpinBox()
-        self.exposure_time_spinbox.setMinimumWidth(90)
-        self.exposure_time_spinbox.setMaximumWidth(125)        
-        self.exposure_time_spinbox.setRange(0.0, 3600.0)
-        self.exposure_time_spinbox.setDecimals(1)
-        self.exposure_time_spinbox.setSingleStep(1.0)
-        self.exposure_time_spinbox.setSuffix(" s")
-        self.exposure_time_spinbox.setValue(
-            self.protocol.common_exposure_time_s
-        )
-        self.exposure_time_spinbox.valueChanged.connect(
-            self.on_exposure_time_changed
-        )
+        group = QGroupBox("Experiment progress")
+        form_layout = QGridLayout(group)
 
         self.selected_wells_label = QLabel()
         self.estimated_duration_label = QLabel()
@@ -68,78 +56,40 @@ class ExperimentDesignerWidget(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("0 / 0 wells completed")
 
-        form_layout.addRow(
-            "Common exposure time:",
-            self.exposure_time_spinbox,
-        )
-        form_layout.addRow(
-            "Selected wells:",
-            self.selected_wells_label,
-        )
-        form_layout.addRow(
-            "Estimated duration:",
-            self.estimated_duration_label,
-        )
-        form_layout.addRow(
-            "Protocol status:",
-            self.validity_label,
-        )
-        form_layout.addRow(
-            "Experiment state:",
-            self.experiment_state_label,
-        )
-        form_layout.addRow(
-            "Current well:",
-            self.current_well_label,
-        )
-        form_layout.addRow(
-            "Sequence position:",
-            self.sequence_position_label,
-        )
-        form_layout.addRow(
-            "Current exposure:",
-            self.current_exposure_label,
-        )
-        form_layout.addRow(
-            "Total remaining time:",
-            self.remaining_time_label,
-        )
-        form_layout.addRow(
-            "Overall progress:",
-            self.progress_bar,
-        )
+        fields = [
+            ("Selected wells:", self.selected_wells_label),
+            ("Estimated exposure:", self.estimated_duration_label),
+            ("Timing status:", self.validity_label),
+            ("Experiment state:", self.experiment_state_label),
+            ("Current well:", self.current_well_label),
+            ("Sequence position:", self.sequence_position_label),
+            ("Current exposure:", self.current_exposure_label),
+            ("Exposure remaining:", self.remaining_time_label),
+        ]
+        for index, (title, value) in enumerate(fields):
+            row, column = divmod(index, 4)
+            form_layout.addWidget(QLabel(title), row * 2, column)
+            form_layout.addWidget(value, row * 2 + 1, column)
+        form_layout.addWidget(self.progress_bar, 4, 0, 1, 4)
 
         main_layout.addWidget(group)
 
         self.refresh()
         self.reset_dashboard()
 
-    def on_exposure_time_changed(self, value: float) -> None:
-        self.protocol.common_exposure_time_s = value
-        self.refresh()
-        self.protocol_changed.emit()
-
     def refresh(self) -> None:
-        self.selected_wells_label.setText(
-            str(self.protocol.selected_well_count)
-        )
+        self.selected_wells_label.setText(str(self.protocol.selected_well_count))
 
         self.estimated_duration_label.setText(
-            self.format_duration(
-                self.protocol.estimated_duration_s
-            )
+            self.format_duration(self.protocol.estimated_duration_s)
         )
 
         if self.protocol.is_valid:
             self.validity_label.setText("Valid")
-            self.validity_label.setStyleSheet(
-                "font-weight: bold; color: #16803a;"
-            )
+            self.validity_label.setStyleSheet("font-weight: bold; color: #16803a;")
         else:
             self.validity_label.setText("Incomplete")
-            self.validity_label.setStyleSheet(
-                "font-weight: bold; color: #a12626;"
-            )
+            self.validity_label.setStyleSheet("font-weight: bold; color: #a12626;")
 
     def update_dashboard(
         self,
@@ -156,24 +106,19 @@ class ExperimentDesignerWidget(QWidget):
         self.current_well_label.setText(current_well or "--")
 
         if current_well is not None and total_wells > 0:
-            self.sequence_position_label.setText(
-                f"{current_index + 1} / {total_wells}"
-            )
+            self.sequence_position_label.setText(f"{current_index + 1} / {total_wells}")
         else:
             self.sequence_position_label.setText("--")
 
         self.current_exposure_label.setText(
             self.format_duration(current_exposure_remaining_s)
         )
-        self.remaining_time_label.setText(
-            self.format_duration(total_remaining_s)
-        )
+        self.remaining_time_label.setText(self.format_duration(total_remaining_s))
 
         completed_wells = max(
             0,
             min(completed_wells, total_wells),
         )
-
 
         self.progress_bar.setRange(0, max(1, total_wells))
         self.progress_bar.setValue(completed_wells)
@@ -199,10 +144,7 @@ class ExperimentDesignerWidget(QWidget):
         hours, minutes = divmod(minutes, 60)
 
         if hours:
-            return (
-                f"{hours:d} h {minutes:02d} min "
-                f"{seconds:02d} s"
-            )
+            return f"{hours:d} h {minutes:02d} min " f"{seconds:02d} s"
 
         if minutes:
             return f"{minutes:d} min {seconds:02d} s"

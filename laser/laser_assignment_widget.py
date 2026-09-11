@@ -48,7 +48,7 @@ class LaserAssignmentWidget(QWidget):
         layout = QVBoxLayout(group)
 
         instruction = QLabel(
-            "Only wells selected in the Plate & Timing tab are eligible. "
+            "Only wells selected in the Well selection tab are eligible. "
             "Select wells, choose a current percentage, then click Apply."
         )
         instruction.setWordWrap(True)
@@ -56,7 +56,6 @@ class LaserAssignmentWidget(QWidget):
 
         self.assignment_widget = WellAssignmentWidget(self.plate)
         self.assignment_widget.selection_changed.connect(self._on_selection_changed)
-        layout.addWidget(self.assignment_widget)
 
         controls = QHBoxLayout()
         controls.addWidget(QLabel("Laser current:"))
@@ -78,6 +77,7 @@ class LaserAssignmentWidget(QWidget):
 
         controls.addStretch()
         layout.addLayout(controls)
+        layout.addWidget(self.assignment_widget)
 
         self.legend_label = QLabel()
         self.legend_label.setWordWrap(True)

@@ -62,7 +62,6 @@ class TimingAssignmentWidget(QWidget):
         self.assignment_widget.selection_changed.connect(
             self._on_assignment_selection_changed
         )
-        assignment_layout.addWidget(self.assignment_widget)
 
         controls_layout = QHBoxLayout()
         controls_layout.addWidget(QLabel("Group duration:"))
@@ -87,6 +86,7 @@ class TimingAssignmentWidget(QWidget):
 
         controls_layout.addStretch()
         assignment_layout.addLayout(controls_layout)
+        assignment_layout.addWidget(self.assignment_widget)
 
         self.legend_label = QLabel()
         self.legend_label.setWordWrap(True)

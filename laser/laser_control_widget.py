@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from laser.laser_modes import LaserMode
@@ -24,15 +25,17 @@ class LaserControlWidget(QGroupBox):
     emission_requested = Signal(bool)
 
     def __init__(self, parent=None) -> None:
-        super().__init__("Laser", parent)
+        super().__init__("Laser control", parent)
 
         self.connected = False
         self.emission_enabled = False
 
         layout = QVBoxLayout(self)
 
-        connection_layout = QHBoxLayout()
-        connection_layout.addWidget(QLabel("Mode:"))
+        self.connection_widget = QWidget()
+        connection_layout = QHBoxLayout(self.connection_widget)
+        connection_layout.setContentsMargins(0, 0, 0, 0)
+        connection_layout.addWidget(QLabel("Laser mode:"))
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(
@@ -52,7 +55,7 @@ class LaserControlWidget(QGroupBox):
         self.disconnect_button.clicked.connect(self.disconnect_requested.emit)
         connection_layout.addWidget(self.disconnect_button)
 
-        layout.addLayout(connection_layout)
+        layout.addWidget(self.connection_widget)
 
         self.emission_label = QLabel("Emission command: unavailable")
         self.current_label = QLabel("Current setting: unavailable")

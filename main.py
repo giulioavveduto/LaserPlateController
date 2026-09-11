@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QScrollArea,
+    QTabWidget,
 )
 
 from stage.stage_worker import StageWorker
@@ -37,6 +38,9 @@ from experiment.experiment_runner import ExperimentRunner, ExperimentState
 from laser.laser_control_widget import LaserControlWidget
 from laser.laser_worker import LaserWorker
 from copy import deepcopy
+from experiment.timing_assignment_widget import TimingAssignmentWidget
+from laser.laser_assignment_widget import LaserAssignmentWidget
+from experiment.start_dialog import StartExperimentDialog
 
 
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
@@ -73,6 +77,7 @@ class MainWindow(QMainWindow):
         self.laser_connected = False
         self.laser_emission_enabled = False
         self.laser_current_percent: int | None = None
+        self.run_directory = None
 
         self.calibration_manager = CalibrationManager()
         self.experiment_protocol = ExperimentProtocol(plate_type="96-well plate")
@@ -82,16 +87,9 @@ class MainWindow(QMainWindow):
         self.resize(1100, 750)
         self.setMinimumSize(800, 600)
 
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
         central_widget = QWidget()
         main_layout = QVBoxLayout(central_widget)
-
-        scroll_area.setWidget(central_widget)
-        self.setCentralWidget(scroll_area)
+        self.setCentralWidget(central_widget)
 
         title = QLabel("Laser Plate Controller")
         title.setStyleSheet("font-size: 26px; font-weight: bold; padding: 10px;")
@@ -99,17 +97,52 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.create_device_status_section())
 
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs, stretch=1)
+        plate_page = QWidget()
+        plate_layout = QVBoxLayout(plate_page)
         body_layout = QHBoxLayout()
         body_layout.addWidget(self.create_stage_section(), stretch=1)
         body_layout.addWidget(self.create_plate_section(), stretch=2)
-        main_layout.addLayout(body_layout)
+        plate_layout.addLayout(body_layout)
+        self.add_scroll_tab(plate_page, "Well selection")
+
+        self.timing_container = QWidget()
+        self.timing_layout = QVBoxLayout(self.timing_container)
+        self.timing_layout.setContentsMargins(0, 0, 0, 0)
+        self.add_scroll_tab(self.timing_container, "Timing")
+
+        laser_page = QWidget()
+        laser_layout = QVBoxLayout(laser_page)
+        laser_body_layout = QHBoxLayout()
+        self.laser_control_widget = LaserControlWidget()
+        self.device_connection_layout.addWidget(
+            self.laser_control_widget.connection_widget
+        )
+        laser_body_layout.addWidget(
+            self.laser_control_widget,
+            stretch=1,
+            alignment=Qt.AlignmentFlag.AlignTop,
+        )
+        notice = QLabel(
+            "Per-well laser settings are saved with the protocol. "
+            "Automatic laser emission is not enabled in this version."
+        )
+        notice.setWordWrap(True)
+        laser_layout.addWidget(notice)
+        self.laser_assignment_container = QWidget()
+        self.laser_assignment_layout = QVBoxLayout(self.laser_assignment_container)
+        self.laser_assignment_layout.setContentsMargins(0, 0, 0, 0)
+        laser_body_layout.addWidget(self.laser_assignment_container, stretch=2)
+        laser_layout.addLayout(laser_body_layout)
+        self.add_scroll_tab(laser_page, "Laser")
+        self.rebuild_assignment_editors()
+
         self.experiment_designer = ExperimentDesignerWidget(self.experiment_protocol)
         self.experiment_designer.protocol_changed.connect(
             self.update_start_button_state
         )
         main_layout.addWidget(self.experiment_designer)
-
-        main_layout.addWidget(self.create_future_devices_section())
 
         experiment_controls_layout = QHBoxLayout()
 
@@ -178,10 +211,44 @@ class MainWindow(QMainWindow):
             False,
         )
         self.create_menu_bar()
+        self.update_start_button_state()
 
         self.create_stage_thread()
 
         self.create_laser_thread()
+
+    def add_scroll_tab(self, page: QWidget, title: str) -> None:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        self.tabs.addTab(scroll, title)
+
+    def rebuild_assignment_editors(self) -> None:
+        if not hasattr(self, "laser_assignment_layout"):
+            return
+        for layout in (self.timing_layout, self.laser_assignment_layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                if item is not None and item.widget() is not None:
+                    item.widget().hide()
+                    item.widget().deleteLater()
+        plate = PlateGeometry(self.experiment_protocol.plate_type)
+        self.timing_editor = TimingAssignmentWidget(self.experiment_protocol, plate)
+        self.laser_editor = LaserAssignmentWidget(self.experiment_protocol, plate)
+        self.timing_layout.addWidget(self.timing_editor)
+        self.laser_assignment_layout.addWidget(self.laser_editor)
+        self.timing_editor.protocol_changed.connect(self.on_assignments_changed)
+        self.laser_editor.protocol_changed.connect(self.on_assignments_changed)
+
+    def on_assignments_changed(self) -> None:
+        self.experiment_designer.refresh()
+        self.update_start_button_state()
+
+    def sync_assignment_editors(self) -> None:
+        if hasattr(self, "timing_editor"):
+            wells = self.experiment_protocol.selected_wells
+            self.timing_editor.set_eligible_wells(wells)
+            self.laser_editor.set_eligible_wells(wells)
 
     def create_laser_thread(self) -> None:
         self.laser_thread = QThread(self)
@@ -218,6 +285,14 @@ class MainWindow(QMainWindow):
         self.laser_thread.start()
 
     def create_menu_bar(self) -> None:
+        settings_menu = self.menuBar().addMenu("Settings")
+        self.developer_action = QAction("Developer mode", self)
+        self.developer_action.setCheckable(True)
+        self.developer_action.setChecked(False)
+        self.developer_action.toggled.connect(self.on_developer_mode_changed)
+        settings_menu.addAction(self.developer_action)
+        self.developer_indicator = QLabel("")
+        self.statusBar().addPermanentWidget(self.developer_indicator)
         file_menu = self.menuBar().addMenu("&File")
 
         self.open_action = QAction("Open...", self)
@@ -235,6 +310,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.save_action)
         file_menu.addAction(self.save_as_action)
+
+    def on_developer_mode_changed(self, enabled: bool) -> None:
+        self.developer_indicator.setText("DEVELOPER MODE" if enabled else "")
+        self.developer_indicator.setStyleSheet("color: #a15c00; font-weight: bold;")
 
     def on_save_requested(self) -> None:
         if self.current_protocol_path is None:
@@ -333,6 +412,12 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Rebuild the plate before restoring treatments: plate changes clear them.
+        self.plate_combo.blockSignals(True)
+        self.plate_combo.setCurrentText(loaded_protocol.plate_type)
+        self.plate_combo.blockSignals(False)
+        self.load_plate_widget(loaded_protocol.plate_type)
+
         self.experiment_protocol.name = loaded_protocol.name
         self.experiment_protocol.plate_type = loaded_protocol.plate_type
         self.experiment_protocol.selected_wells = list(loaded_protocol.selected_wells)
@@ -346,15 +431,18 @@ class MainWindow(QMainWindow):
             loaded_protocol.well_treatments
         )
 
-        self.plate_combo.setCurrentText(loaded_protocol.plate_type)
-
         if self.current_plate_widget is not None:
-            self.current_plate_widget.set_selected_wells(loaded_protocol.selected_wells)
+            self.current_plate_widget.blockSignals(True)
+            try:
+                self.current_plate_widget.set_selected_wells(
+                    loaded_protocol.selected_wells
+                )
+            finally:
+                self.current_plate_widget.blockSignals(False)
 
-        self.experiment_designer.exposure_time_spinbox.setValue(
-            loaded_protocol.common_exposure_time_s
-        )
+        self.sync_assignment_editors()
         self.experiment_designer.refresh()
+        self.update_navigation_button_state()
 
         self.current_protocol_path = path
         self.update_window_title()
@@ -400,16 +488,25 @@ class MainWindow(QMainWindow):
 
     def create_device_status_section(self) -> QGroupBox:
         group = QGroupBox("Device status")
-        layout = QHBoxLayout(group)
+        outer_layout = QVBoxLayout(group)
+        status_layout = QHBoxLayout()
+        outer_layout.addLayout(status_layout)
 
         self.stage_status_label = QLabel()
         self.laser_status_label = QLabel()
         self.incubator_status_label = QLabel()
 
-        layout.addWidget(self.stage_status_label)
-        layout.addWidget(self.laser_status_label)
-        layout.addWidget(self.incubator_status_label)
-        layout.addStretch()
+        status_layout.addWidget(self.stage_status_label)
+        status_layout.addWidget(self.laser_status_label)
+        status_layout.addWidget(self.incubator_status_label)
+        status_layout.addStretch()
+
+        self.device_connection_layout = QHBoxLayout()
+        outer_layout.addLayout(self.device_connection_layout)
+        stage_connections = QWidget()
+        layout = QHBoxLayout(stage_connections)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.device_connection_layout.addWidget(stage_connections)
 
         layout.addWidget(QLabel("Stage mode:"))
 
@@ -674,24 +771,18 @@ class MainWindow(QMainWindow):
         self.navigate_to_well_button.setEnabled(can_navigate)
 
     def update_start_button_state(self) -> None:
-        plate_name = self.experiment_protocol.plate_type
-
-        can_start = (
-            self.experiment_protocol.is_valid
-            and self.stage_connected
-            and self.stage_homed
-            and not self.stage_busy
-            and bool(plate_name)
-            and self.calibration_manager.is_calibrated(plate_name)
-            and not self.experiment_runner.is_running
+        self.start_button.setEnabled(
+            not self.experiment_runner.is_running and not self.stage_busy
         )
-
-        self.start_button.setEnabled(can_start)
 
     def start_experiment(self) -> None:
         if not self.start_button.isEnabled():
             return
 
+        dialog = StartExperimentDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.snapshot is None:
+            return
+        self.run_directory = dialog.run_directory
         self._stopped_interrupted_well = None
 
         if self.current_plate_widget is not None:
@@ -700,7 +791,7 @@ class MainWindow(QMainWindow):
             )
 
         try:
-            self.experiment_runner.start(self.experiment_protocol)
+            self.experiment_runner.start(dialog.snapshot)
         except (RuntimeError, ValueError) as exc:
             QMessageBox.critical(
                 self,
@@ -710,7 +801,7 @@ class MainWindow(QMainWindow):
             return
 
         self.update_start_button_state()
-        self.statusBar().showMessage("Automatic experiment started")
+        self.statusBar().showMessage("Stage-only test started — NO IRRADIATION")
 
     def pause_or_resume_experiment(self) -> None:
         if self.experiment_runner.is_paused:
@@ -744,8 +835,12 @@ class MainWindow(QMainWindow):
 
     def set_experiment_inputs_locked(self, locked: bool) -> None:
         enabled = not locked
+        self.developer_action.setEnabled(enabled)
+        self.laser_control_widget.setEnabled(enabled)
+        self.laser_control_widget.connection_widget.setEnabled(enabled)
 
-        self.experiment_designer.setEnabled(enabled)
+        self.timing_editor.setEnabled(enabled)
+        self.laser_editor.setEnabled(enabled)
         self.plate_combo.setEnabled(enabled)
 
         if self.current_plate_widget is not None:
@@ -914,6 +1009,12 @@ class MainWindow(QMainWindow):
             10000,
         )
         self.update_experiment_controls()
+        QMessageBox.information(
+            self,
+            "Stage-only test completed",
+            f"{len(self.experiment_runner.wells)} wells completed; stage returned home.\n"
+            f"No irradiation was performed.\nProtocol snapshot: {self.run_directory}",
+        )
 
     def on_current_well_changed(self, well_name: str) -> None:
         self.update_experiment_dashboard()
@@ -942,6 +1043,7 @@ class MainWindow(QMainWindow):
             widget = item.widget()
 
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
 
         self.current_plate_widget = None
@@ -965,6 +1067,10 @@ class MainWindow(QMainWindow):
         self.current_plate_widget = WellPlateWidget(plate)
         self.experiment_protocol.plate_type = plate.name
         self.experiment_protocol.selected_wells = []
+        self.experiment_protocol.well_treatments.clear()
+        self.experiment_protocol.common_exposure_time_s = 0.0
+        self.experiment_protocol.default_laser_setpoint = None
+        self.rebuild_assignment_editors()
 
         self.current_plate_widget.selection_changed.connect(
             self.on_well_selection_changed
@@ -1009,6 +1115,8 @@ class MainWindow(QMainWindow):
         selected_wells: list[str],
     ) -> None:
         self.experiment_protocol.selected_wells = list(selected_wells)
+        self.experiment_protocol.remove_unselected_treatments()
+        self.sync_assignment_editors()
         self.experiment_designer.refresh()
         self.update_navigation_button_state()
 
@@ -1486,6 +1594,14 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:
+        if self.experiment_runner.is_running or self.stage_busy:
+            QMessageBox.warning(
+                self,
+                "Operation in progress",
+                "Stop the test and wait for stage movement to finish before closing.",
+            )
+            event.ignore()
+            return
 
         if self.laser_thread.isRunning():
             QMetaObject.invokeMethod(
