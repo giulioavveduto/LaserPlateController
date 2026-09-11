@@ -52,6 +52,7 @@ class ExperimentRunner(QObject):
         self.last_laser_off_confirmed = False
         self.fault_latched = False
         self._after_off_action: str | None = None
+        self._fault_message: str | None = None
         self.current_well_index = -1
         self.exposure_time_s = 0.0
         self.plate_type = ""
@@ -88,7 +89,13 @@ class ExperimentRunner(QObject):
         self.laser_requested.emit(self._laser_token, action, value, self.laser_cancel)
 
     @Slot(int, bool, int, str)
-    def notify_laser_finished(self, token, enabled, percent, error) -> None:
+    def notify_laser_finished(
+        self,
+        token: int,
+        enabled: bool,
+        percent: int,
+        error: str,
+    ) -> None:
         pending = self._laser_pending
         if pending is None or token != pending[0]:
             return
@@ -105,6 +112,27 @@ class ExperimentRunner(QObject):
 
         if error:
             self.laser_cancel.set()
+
+        # A fault has priority over every normal pause/stop callback.
+        if self._fault_message is not None:
+            off_confirmed = not enabled and "OFF UNCONFIRMED" not in error
+
+            if off_confirmed:
+                self.last_laser_off_confirmed = True
+                self._finish_fault(error, off_confirmed=True)
+            elif action == "off":
+                self.last_laser_off_confirmed = False
+                self._finish_fault(
+                    error or "OFF UNCONFIRMED: emission remains ON.",
+                    off_confirmed=False,
+                )
+            else:
+                self._send_laser_command(
+                    "off",
+                    0,
+                    self._after_fault_off,
+                )
+            return
 
         interruption_requested = self.stop_requested or self.pause_requested
 
@@ -141,7 +169,28 @@ class ExperimentRunner(QObject):
         self._laser_pending = None
         self.laser_timeout.stop()
         self.laser_cancel.set()
-        pending[3]("Laser confirmation timed out; emission state is unknown.")
+
+        _, action, _, callback = pending
+        error = (
+            "OFF UNCONFIRMED: laser confirmation timed out; "
+            "the emission state is unknown."
+        )
+
+        if self._fault_message is not None:
+            if action == "off":
+                self._finish_fault(
+                    error,
+                    off_confirmed=False,
+                )
+            else:
+                self._send_laser_command(
+                    "off",
+                    0,
+                    self._after_fault_off,
+                )
+            return
+
+        callback(error)
 
     @property
     def is_running(self) -> bool:
@@ -455,8 +504,6 @@ class ExperimentRunner(QObject):
         context: str,
         error: str,
     ) -> None:
-        self.fault_latched = True
-        self.last_laser_off_confirmed = "OFF UNCONFIRMED" not in error
         self.fail(f"{context}:\n{error}")
 
     def _start_exposure(self) -> None:
@@ -682,5 +729,65 @@ class ExperimentRunner(QObject):
     def fail(self, message: str) -> None:
         self.exposure_timer.stop()
         self.pause_requested = False
+        self.stop_requested = False
+        self.movement_pending = False
+        self.home_pending = False
+
+        if self.stage_only:
+            self.set_state(ExperimentState.ERROR)
+            self.error_occurred.emit(message)
+            return
+
+        if self._fault_message is None:
+            self._fault_message = message
+        elif message not in self._fault_message:
+            self._fault_message += f"\n\nAdditional error:\n{message}"
+
+        self.fault_latched = True
+        self.last_laser_off_confirmed = False
+        self.laser_cancel.set()
+        self.set_state(ExperimentState.SWITCHING_OFF)
+
+        # If a serial command is running, its identified reply will
+        # continue the fault shutdown through notify_laser_finished().
+        if self._laser_pending is not None:
+            return
+
+        self._send_laser_command(
+            "off",
+            0,
+            self._after_fault_off,
+        )
+
+    def _after_fault_off(self, error: str) -> None:
+        off_confirmed = not error
+
+        self.last_laser_off_confirmed = off_confirmed
+        self._finish_fault(
+            error,
+            off_confirmed=off_confirmed,
+        )
+
+    def _finish_fault(
+        self,
+        shutdown_information: str,
+        *,
+        off_confirmed: bool,
+    ) -> None:
+        message = self._fault_message or "Experiment failed."
+        self._fault_message = None
+
+        if shutdown_information and shutdown_information != "cancelled":
+            message += "\n\nLaser shutdown information:\n" f"{shutdown_information}"
+
+        if not off_confirmed:
+            message += (
+                "\n\nDANGER: laser emission OFF could not be confirmed. "
+                "Use the physical safety key immediately. Stage movement "
+                "and homing are blocked. Restart the application only "
+                "after checking the hardware."
+            )
+
+        self.last_laser_off_confirmed = off_confirmed
         self.set_state(ExperimentState.ERROR)
         self.error_occurred.emit(message)

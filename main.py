@@ -724,6 +724,10 @@ class MainWindow(QMainWindow):
             or not self.stage_connected
             or not self.stage_homed
             or self.stage_busy
+            or (
+                self.experiment_runner.fault_latched
+                and not self.experiment_runner.last_laser_off_confirmed
+            )
         ):
             return
 
@@ -778,7 +782,9 @@ class MainWindow(QMainWindow):
 
     def update_start_button_state(self) -> None:
         self.start_button.setEnabled(
-            not self.experiment_runner.is_running and not self.stage_busy
+            not self.experiment_runner.is_running
+            and not self.experiment_runner.fault_latched
+            and not self.stage_busy
         )
 
     def start_experiment(self) -> None:
@@ -1043,9 +1049,26 @@ class MainWindow(QMainWindow):
         self.update_experiment_dashboard()
 
     def on_experiment_error(self, message: str) -> None:
+        runner = self.experiment_runner
+        unsafe_shutdown = runner.fault_latched and not runner.last_laser_off_confirmed
+
+        self.update_experiment_dashboard()
+        self.update_experiment_controls()
+
+        if unsafe_shutdown:
+            self.set_stage_controls_enabled(False)
+            self.calibrate_button.setEnabled(False)
+            self.navigate_to_well_button.setEnabled(False)
+            self.disconnect_button.setEnabled(False)
+            self.laser_control_widget.setEnabled(False)
+
+            self.statusBar().showMessage(
+                "SAFETY FAULT — use the physical laser key",
+            )
+
         QMessageBox.critical(
             self,
-            "Experiment error",
+            ("Experiment safety fault" if unsafe_shutdown else "Experiment error"),
             message,
         )
         self.update_start_button_state()
@@ -1296,13 +1319,23 @@ class MainWindow(QMainWindow):
         dx_mm: float,
         dy_mm: float,
     ) -> None:
-        if not self.stage_connected or not self.stage_homed or self.stage_busy:
+        if (
+            not self.stage_connected
+            or not self.stage_homed
+            or self.stage_busyor(
+                self.experiment_runner.fault_latched
+                and not self.experiment_runner.last_laser_off_confirmed
+            )
+        ):
             return
 
         self.request_move_stage.emit(dx_mm, dy_mm)
 
     def confirm_home_stage(self) -> None:
-        if not self.stage_connected or self.stage_busy:
+        if not self.stage_connected or self.stage_busyor(
+            self.experiment_runner.fault_latched
+            and not self.experiment_runner.last_laser_off_confirmed
+        ):
             return
 
         answer = QMessageBox.warning(
@@ -1484,11 +1517,16 @@ class MainWindow(QMainWindow):
 
     def show_stage_error(self, message: str) -> None:
         self.stage_busy = False
-
         experiment_was_running = self.experiment_runner.is_running
 
         if experiment_was_running:
-            self.experiment_runner.fail(message)
+            self.set_stage_controls_enabled(False)
+            self.calibrate_button.setEnabled(False)
+            self.navigate_to_well_button.setEnabled(False)
+            self.disconnect_button.setEnabled(False)
+
+            self.experiment_runner.fail(f"Stage failure during experiment:\n{message}")
+            return
 
         if self.stage_connected and self.stage_homed:
             self.set_stage_controls_enabled(True)
@@ -1497,19 +1535,24 @@ class MainWindow(QMainWindow):
             self.home_button.setEnabled(True)
             self.calibrate_button.setEnabled(False)
 
-        if not experiment_was_running:
-            QMessageBox.critical(
-                self,
-                "Stage error",
-                message,
-            )
-
+        QMessageBox.critical(
+            self,
+            "Stage error",
+            message,
+        )
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
 
     def request_absolute_position(self) -> None:
-        if not self.stage_connected or not self.stage_homed or self.stage_busy:
+        if (
+            not self.stage_connected
+            or not self.stage_homed
+            or self.stage_busyor(
+                self.experiment_runner.fault_latched
+                and not self.experiment_runner.last_laser_off_confirmed
+            )
+        ):
             return
 
         x_mm = self.absolute_x_spinbox.value()
@@ -1549,6 +1592,9 @@ class MainWindow(QMainWindow):
         )
 
     def on_laser_disconnected(self) -> None:
+        automatic_run_active = (
+            self.experiment_runner.is_running and not self.experiment_runner.stage_only
+        )
         self.laser_connected = False
         self.laser_emission_enabled = False
         self.laser_current_percent = None
@@ -1563,6 +1609,10 @@ class MainWindow(QMainWindow):
             "Laser disconnected",
             5000,
         )
+        if automatic_run_active:
+            self.experiment_runner.fail(
+                "The laser disconnected during automatic execution."
+            )
 
     def on_laser_status_updated(
         self,
@@ -1590,6 +1640,9 @@ class MainWindow(QMainWindow):
         )
 
     def show_laser_error(self, message: str) -> None:
+        if self.experiment_runner.is_running and not self.experiment_runner.stage_only:
+            self.experiment_runner.fail(f"Laser communication failure:\n{message}")
+            return
         if not self.laser_connected:
             self.laser_control_widget.set_connected(False)
             self.set_device_status(
