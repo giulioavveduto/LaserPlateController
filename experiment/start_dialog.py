@@ -87,10 +87,16 @@ def launch_problems(window, stage_only: bool) -> list[str]:
                 problems.append(f"{well}: current must be an integer percentage.")
         if not window.laser_connected:
             problems.append("Connect the laser or laser simulator.")
-        problems.append(
-            "Automatic laser execution is not implemented in this checkpoint. "
-            "Irradiation cannot be launched yet."
+        stage_is_simulator = window.stage_mode_combo.currentText() == "Simulator"
+        laser_is_simulator = (
+            window.laser_control_widget.mode_combo.currentText() == "Simulator"
         )
+
+        if stage_is_simulator != laser_is_simulator:
+            problems.append(
+                "For automatic execution, use both simulators or both "
+                "real devices. Mixed real/simulator operation is blocked."
+            )
     return problems
 
 
@@ -100,6 +106,7 @@ class StartExperimentDialog(QDialog):
         self.window = window
         self.snapshot = None
         self.run_directory = None
+        self.stage_only = True
         self.setWindowTitle("Review experiment before starting")
         self.resize(650, 500)
         layout = QVBoxLayout(self)
@@ -199,10 +206,17 @@ class StartExperimentDialog(QDialog):
             data["run"] = {
                 "id": run_id,
                 "created_at": stamp.isoformat(),
-                "mode": "stage_only",
+                "mode": ("stage_only" if self.stage_only else "automatic_irradiation"),
                 "stage_mode": self.window.stage_mode_combo.currentText(),
                 "a1_mm": self.window.calibration_manager.get_a1(snapshot.plate_type),
-                "note": "No irradiation; stage movements and countdowns only.",
+                "note": (
+                    "No irradiation; stage movements and countdowns only."
+                    if self.stage_only
+                    else (
+                        "Automatic laser sequence; exposure means "
+                        "controller-confirmed emission."
+                    )
+                ),
             }
             with (directory / "protocol.lpp").open("x", encoding="utf-8") as file:
                 json.dump(data, file, indent=4, allow_nan=False)
@@ -214,3 +228,4 @@ class StartExperimentDialog(QDialog):
         self.snapshot = snapshot
         self.run_directory = directory
         self.accept()
+        self.stage_only = bool(self.mode.currentData())

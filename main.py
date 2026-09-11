@@ -262,6 +262,12 @@ class MainWindow(QMainWindow):
         self.request_disconnect_laser.connect(self.laser_worker.disconnect_laser)
         self.request_laser_current.connect(self.laser_worker.set_current_percent)
         self.request_laser_emission.connect(self.laser_worker.set_emission_enabled)
+        self.experiment_runner.laser_requested.connect(
+            self.laser_worker.execute_command
+        )
+        self.laser_worker.command_finished.connect(
+            self.experiment_runner.notify_laser_finished
+        )
 
         self.laser_control_widget.mode_changed.connect(self.request_laser_mode.emit)
         self.laser_control_widget.connect_requested.connect(
@@ -791,7 +797,10 @@ class MainWindow(QMainWindow):
             )
 
         try:
-            self.experiment_runner.start(dialog.snapshot)
+            self.experiment_runner.start(
+                dialog.snapshot,
+                stage_only=dialog.stage_only,
+            )
         except (RuntimeError, ValueError) as exc:
             QMessageBox.critical(
                 self,
@@ -801,7 +810,11 @@ class MainWindow(QMainWindow):
             return
 
         self.update_start_button_state()
-        self.statusBar().showMessage("Stage-only test started — NO IRRADIATION")
+        self.statusBar().showMessage(
+            "Stage-only test started — NO IRRADIATION"
+            if dialog.stage_only
+            else "Automatic irradiation experiment started"
+        )
 
     def pause_or_resume_experiment(self) -> None:
         if self.experiment_runner.is_paused:
@@ -881,7 +894,9 @@ class MainWindow(QMainWindow):
         self.pause_button.setEnabled(
             state
             in {
+                ExperimentState.SWITCHING_OFF,
                 ExperimentState.MOVING,
+                ExperimentState.PREPARING,
                 ExperimentState.EXPOSING,
                 ExperimentState.PAUSED,
             }
@@ -889,8 +904,11 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(
             state
             in {
+                ExperimentState.SWITCHING_OFF,
                 ExperimentState.MOVING,
+                ExperimentState.PREPARING,
                 ExperimentState.EXPOSING,
+                ExperimentState.PAUSING,
                 ExperimentState.PAUSED,
                 ExperimentState.HOMING,
             }
@@ -910,35 +928,34 @@ class MainWindow(QMainWindow):
         runner = self.experiment_runner
         total_wells = len(runner.wells)
 
-        completed_wells = min(
-            max(runner.current_well_index, 0),
-            total_wells,
-        )
-
-        if runner.state is ExperimentState.COMPLETED:
-            completed_wells = total_wells
+        completed_wells = len(runner.completed_wells)
 
         current_exposure_remaining_s = 0.0
 
         if runner.current_well is not None and runner.state in {
+            ExperimentState.SWITCHING_OFF,
             ExperimentState.MOVING,
+            ExperimentState.PREPARING,
             ExperimentState.EXPOSING,
+            ExperimentState.PAUSING,
             ExperimentState.PAUSED,
         }:
             current_exposure_remaining_s = runner.exposure_remaining_s
 
         if self.current_plate_widget is not None:
-            completed_well_names = runner.wells[: max(0, runner.current_well_index)]
-
-            if runner.state is ExperimentState.COMPLETED:
-                completed_well_names = list(runner.wells)
+            completed_well_names = list(runner.completed_wells)
 
             if runner.state in {
+                ExperimentState.SWITCHING_OFF,
                 ExperimentState.MOVING,
+                ExperimentState.PREPARING,
                 ExperimentState.EXPOSING,
+                ExperimentState.PAUSING,
                 ExperimentState.PAUSED,
             }:
+
                 displayed_current_well = runner.current_well
+
             elif runner.state in {
                 ExperimentState.STOPPING,
                 ExperimentState.STOPPED,
@@ -1427,10 +1444,7 @@ class MainWindow(QMainWindow):
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
-        if self.experiment_runner.state in {
-            ExperimentState.MOVING,
-            ExperimentState.STOPPING,
-        }:
+        if self.experiment_runner.movement_pending:
             self.experiment_runner.notify_movement_finished()
 
         self.update_experiment_controls()
@@ -1463,10 +1477,7 @@ class MainWindow(QMainWindow):
         self.update_navigation_button_state()
         self.update_start_button_state()
         self.disconnect_button.setEnabled(self.stage_connected)
-        if self.experiment_runner.state in {
-            ExperimentState.HOMING,
-            ExperimentState.STOPPING,
-        }:
+        if self.experiment_runner.home_pending:
             self.experiment_runner.notify_homing_finished()
 
         self.update_experiment_controls()

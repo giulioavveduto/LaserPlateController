@@ -14,6 +14,7 @@ class LaserWorker(QObject):
     disconnected = Signal()
     status_updated = Signal(bool, int)
     error_occurred = Signal(str)
+    command_finished = Signal(int, bool, int, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -175,6 +176,73 @@ class LaserWorker(QObject):
         current_percent = self.laser.get_current_percent()
 
         return emission_enabled, current_percent
+
+    @Slot(int, str, int, object)
+    def execute_command(self, token, action, value, cancel) -> None:
+        """Execute and verify one identified laser command."""
+        enabled, percent, error = False, 0, ""
+        self.operation_in_progress = True
+
+        try:
+            if self.laser is None:
+                raise RuntimeError("Laser is disconnected.")
+
+            if action not in {"off", "current", "on"}:
+                raise ValueError("Unknown laser command.")
+
+            if action != "off":
+                if type(value) is not int or not 0 <= value <= 100:
+                    raise ValueError("Current must be an integer from 0 to 100.")
+
+                if cancel.is_set():
+                    raise RuntimeError("cancelled")
+
+                enabled, percent = self._read_status_values()
+                if enabled:
+                    raise RuntimeError("Emission must be OFF before preparation.")
+
+                if cancel.is_set():
+                    raise RuntimeError("cancelled")
+
+            if action == "off":
+                self.laser.set_emission_enabled(False)
+            elif action == "current":
+                self.laser.set_current_percent(value)
+            else:
+                if value == 0 or percent != value:
+                    raise RuntimeError("Refusing ON: zero or mismatched current.")
+                self.laser.set_emission_enabled(True)
+
+            enabled, percent = self._read_status_values()
+
+            if enabled != (action == "on"):
+                raise RuntimeError("Emission readback mismatch.")
+            if action != "off" and percent != value:
+                raise RuntimeError("Current readback mismatch.")
+            if action != "off" and cancel.is_set():
+                raise RuntimeError("cancelled")
+
+        except Exception as exc:
+            error = str(exc)
+
+            # Failures and cancellation trigger a verified OFF attempt.
+            try:
+                if self.laser is None:
+                    raise RuntimeError("Laser is disconnected.")
+
+                self.laser.set_emission_enabled(False)
+                enabled, percent = self._read_status_values()
+
+                if enabled:
+                    raise RuntimeError("Emission remains ON.")
+
+            except Exception as shutdown_error:
+                error += f" | OFF UNCONFIRMED: {shutdown_error}"
+
+        finally:
+            self.operation_in_progress = False
+
+        self.command_finished.emit(token, enabled, percent, error)
 
     def _fail_and_disconnect(self, message: str) -> None:
         if self.status_timer is not None:

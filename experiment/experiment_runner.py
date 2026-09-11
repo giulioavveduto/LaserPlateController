@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import math
 from enum import Enum, auto
 
-from PySide6.QtCore import QObject, QTimer, Signal
-
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from experiment.experiment_protocol import ExperimentProtocol
+from threading import Event
 
 
 class ExperimentState(Enum):
     IDLE = auto()
+    SWITCHING_OFF = auto()
     MOVING = auto()
+    PREPARING = auto()
     EXPOSING = auto()
+    PAUSING = auto()
     PAUSED = auto()
     HOMING = auto()
     STOPPING = auto()
@@ -26,6 +30,7 @@ class ExperimentRunner(QObject):
 
     move_requested = Signal(str)
     home_requested = Signal()
+    laser_requested = Signal(int, str, int, object)
 
     experiment_finished = Signal()
     experiment_stopped = Signal()
@@ -37,6 +42,16 @@ class ExperimentRunner(QObject):
         self.state = ExperimentState.IDLE
         self.wells: list[str] = []
         self.exposure_times_s: list[float] = []
+        self.current_percents: list[int] = []
+        self.completed_wells: list[str] = []
+
+        self.stage_only = True
+        self.stop_requested = False
+        self.movement_pending = False
+        self.home_pending = False
+        self.last_laser_off_confirmed = False
+        self.fault_latched = False
+        self._after_off_action: str | None = None
         self.current_well_index = -1
         self.exposure_time_s = 0.0
         self.plate_type = ""
@@ -48,6 +63,85 @@ class ExperimentRunner(QObject):
         self.exposure_timer = QTimer(self)
         self.exposure_timer.setInterval(100)
         self.exposure_timer.timeout.connect(self._update_exposure)
+        self.laser_cancel = Event()
+        self._laser_token = 0
+        self._laser_pending = None
+
+        self.laser_timeout = QTimer(self)
+        self.laser_timeout.setSingleShot(True)
+        self.laser_timeout.setInterval(45000)
+        self.laser_timeout.timeout.connect(self._on_laser_timeout)
+
+    def _send_laser_command(self, action, value, callback) -> None:
+        if self._laser_pending is not None:
+            raise RuntimeError("A laser command is already pending.")
+        if action not in {"off", "current", "on"}:
+            raise ValueError("Unknown laser command.")
+        if type(value) is not int or not 0 <= value <= 100:
+            raise ValueError("Invalid laser current.")
+        if action == "on" and value == 0:
+            raise ValueError("0% wells must remain OFF.")
+
+        self._laser_token += 1
+        self._laser_pending = (self._laser_token, action, value, callback)
+        self.laser_timeout.start()
+        self.laser_requested.emit(self._laser_token, action, value, self.laser_cancel)
+
+    @Slot(int, bool, int, str)
+    def notify_laser_finished(self, token, enabled, percent, error) -> None:
+        pending = self._laser_pending
+        if pending is None or token != pending[0]:
+            return
+
+        self.laser_timeout.stop()
+        self._laser_pending = None
+        _, action, value, callback = pending
+
+        if not error:
+            if enabled != (action == "on"):
+                error = "Unexpected emission state in the laser reply."
+            elif action != "off" and percent != value:
+                error = "Unexpected current in the laser reply."
+
+        if error:
+            self.laser_cancel.set()
+
+        interruption_requested = self.stop_requested or self.pause_requested
+
+        if interruption_requested and error in {"", "cancelled"}:
+            target_callback = (
+                self._after_stop_off if self.stop_requested else self._after_pause_off
+            )
+
+            final_stop_confirmation = (
+                self.stop_requested
+                and action == "off"
+                and callback == self._after_final_off
+            )
+
+            if action == "off" and (
+                callback == target_callback or final_stop_confirmation
+            ):
+                callback("")
+            else:
+                self._send_laser_command(
+                    "off",
+                    0,
+                    target_callback,
+                )
+            return
+
+        callback(error)
+
+    def _on_laser_timeout(self) -> None:
+        pending = self._laser_pending
+        if pending is None:
+            return
+
+        self._laser_pending = None
+        self.laser_timeout.stop()
+        self.laser_cancel.set()
+        pending[3]("Laser confirmation timed out; emission state is unknown.")
 
     @property
     def is_running(self) -> bool:
@@ -57,6 +151,9 @@ class ExperimentRunner(QObject):
             ExperimentState.PAUSED,
             ExperimentState.HOMING,
             ExperimentState.STOPPING,
+            ExperimentState.SWITCHING_OFF,
+            ExperimentState.PREPARING,
+            ExperimentState.PAUSING,
         }
 
     @property
@@ -76,6 +173,13 @@ class ExperimentRunner(QObject):
             return self.exposure_times_s[self.current_well_index]
 
         return 0.0
+
+    @property
+    def current_percent(self) -> int:
+        if 0 <= self.current_well_index < len(self.current_percents):
+            return self.current_percents[self.current_well_index]
+
+        return 0
 
     @property
     def remaining_time_s(self) -> float:
@@ -106,39 +210,136 @@ class ExperimentRunner(QObject):
         self.state = state
         self.state_changed.emit(state)
 
-    def start(self, protocol: ExperimentProtocol) -> None:
+    def start(
+        self,
+        protocol: ExperimentProtocol,
+        stage_only: bool = True,
+    ) -> None:
         if self.is_running:
             raise RuntimeError("An experiment is already running.")
+
+        if self.fault_latched:
+            raise RuntimeError(
+                "A previous safety fault is latched. "
+                "Restart the application after checking the hardware."
+            )
+
+        if self._laser_pending is not None:
+            raise RuntimeError("A laser command is still pending.")
 
         if not protocol.is_valid:
             raise ValueError("Cannot start an invalid experiment protocol.")
 
-        self.exposure_timer.stop()
+        exposure_times = [
+            protocol.exposure_time_for(well) for well in protocol.selected_wells
+        ]
 
+        if not all(math.isfinite(value) and value > 0 for value in exposure_times):
+            raise ValueError("Every selected well requires a finite positive duration.")
+
+        current_percents: list[int] = []
+
+        for well in protocol.selected_wells:
+            if stage_only:
+                current_percents.append(0)
+                continue
+
+            setpoint = protocol.laser_setpoint_for(well)
+
+            if (
+                setpoint is None
+                or setpoint.mode != "current_percent"
+                or not math.isfinite(setpoint.value)
+                or not 0 <= setpoint.value <= 100
+                or not float(setpoint.value).is_integer()
+            ):
+                raise ValueError(
+                    f"{well} requires an integer laser current " "between 0 and 100%."
+                )
+
+            current_percents.append(int(setpoint.value))
+
+        self.exposure_timer.stop()
+        self.laser_timeout.stop()
+        self.laser_cancel.clear()
+
+        self.stage_only = stage_only
         self.plate_type = protocol.plate_type
         self.wells = list(protocol.selected_wells)
-        self.exposure_times_s = [
-            protocol.exposure_time_for(well_name) for well_name in self.wells
-        ]
+        self.exposure_times_s = exposure_times
+        self.current_percents = current_percents
+        self.completed_wells = []
+
         self.current_well_index = 0
         self.exposure_time_s = self.current_exposure_time_s
         self.exposure_remaining_s = self.exposure_time_s
+
         self.pause_requested = False
+        self.stop_requested = False
         self.paused_before_exposure = False
+        self.movement_pending = False
+        self.home_pending = False
+        self._after_off_action = None
 
         current_well = self.current_well
-
         if current_well is None:
             raise RuntimeError("The experiment contains no wells.")
 
         self.current_well_changed.emit(current_well)
         self.remaining_time_changed.emit(self.remaining_time_s)
+
+        if self.stage_only:
+            self.last_laser_off_confirmed = True
+            self._move_current_well()
+        else:
+            self.last_laser_off_confirmed = False
+            self.set_state(ExperimentState.SWITCHING_OFF)
+            self._send_laser_command(
+                "off",
+                0,
+                self._after_initial_laser_off,
+            )
+
+    def _after_initial_laser_off(self, error: str) -> None:
+        if error:
+            self.fault_latched = True
+            self.fail(
+                "Could not confirm laser emission OFF before movement:\n" f"{error}"
+            )
+            return
+
+        self.last_laser_off_confirmed = True
+        self._move_current_well()
+
+    def _move_current_well(self) -> None:
+        if not self.stage_only and not self.last_laser_off_confirmed:
+            self.fault_latched = True
+            self.fail(
+                "Movement refused because laser emission OFF " "was not confirmed."
+            )
+            return
+
+        self.movement_pending = True
         self.set_state(ExperimentState.MOVING)
-        self.move_requested.emit(current_well)
+        self.move_requested.emit(self.current_well)
 
     def notify_movement_finished(self) -> None:
+        if not self.movement_pending:
+            return
+
+        self.movement_pending = False
+
         if self.state is ExperimentState.STOPPING:
-            self.home_requested.emit()
+            if self.stage_only:
+                self.home_pending = True
+                self.home_requested.emit()
+            else:
+                self.set_state(ExperimentState.SWITCHING_OFF)
+                self._send_laser_command(
+                    "off",
+                    0,
+                    self._after_stop_off,
+                )
             return
 
         if self.state is not ExperimentState.MOVING:
@@ -147,13 +348,116 @@ class ExperimentRunner(QObject):
         self.exposure_remaining_s = self.exposure_time_s
 
         if self.pause_requested:
-            self.pause_requested = False
-            self.paused_before_exposure = True
-            self.set_state(ExperimentState.PAUSED)
-            self.remaining_time_changed.emit(self.remaining_time_s)
+            if self.stage_only:
+                self.pause_requested = False
+                self.paused_before_exposure = True
+                self.set_state(ExperimentState.PAUSED)
+                self.remaining_time_changed.emit(self.remaining_time_s)
+            else:
+                self.set_state(ExperimentState.PAUSING)
+                self._send_laser_command(
+                    "off",
+                    0,
+                    self._after_pause_off,
+                )
             return
 
+        if self.stage_only:
+            self._start_exposure()
+            return
+
+        # Reconfirm OFF after physical movement before configuring
+        # the laser for the arrived well.
+        self.last_laser_off_confirmed = False
+        self.set_state(ExperimentState.SWITCHING_OFF)
+        self._send_laser_command(
+            "off",
+            0,
+            self._after_arrival_off,
+        )
+
+    def _after_arrival_off(self, error: str) -> None:
+        if error:
+            self._laser_sequence_failed(
+                "Could not confirm emission OFF after movement",
+                error,
+            )
+            return
+
+        self.last_laser_off_confirmed = True
+        self.set_state(ExperimentState.PREPARING)
+        self._send_laser_command(
+            "current",
+            self.current_percent,
+            self._after_current_applied,
+        )
+
+    def _after_current_applied(self, error: str) -> None:
+        if error:
+            self._laser_sequence_failed(
+                "Could not apply the well laser current",
+                error,
+            )
+            return
+
+        if self.current_percent == 0:
+            # Control/sham well: run the timing with emission OFF.
+            self.last_laser_off_confirmed = True
+            self._start_exposure()
+            return
+
+        self._send_laser_command(
+            "on",
+            self.current_percent,
+            self._after_emission_on,
+        )
+
+    def _after_emission_on(self, error: str) -> None:
+        if error:
+            self._laser_sequence_failed(
+                "Could not confirm laser emission ON",
+                error,
+            )
+            return
+
+        self.last_laser_off_confirmed = False
         self._start_exposure()
+
+    def _after_pause_off(self, error: str) -> None:
+        if error:
+            self._laser_sequence_failed(
+                "Could not confirm emission OFF while pausing",
+                error,
+            )
+            return
+
+        self.last_laser_off_confirmed = True
+        self.pause_requested = False
+        self.paused_before_exposure = True
+        self.set_state(ExperimentState.PAUSED)
+        self.remaining_time_changed.emit(self.remaining_time_s)
+
+    def _after_stop_off(self, error: str) -> None:
+        if error:
+            self._laser_sequence_failed(
+                "Could not confirm emission OFF before homing",
+                error,
+            )
+            return
+
+        self.last_laser_off_confirmed = True
+        self.home_pending = True
+        self.set_state(ExperimentState.STOPPING)
+        self.home_requested.emit()
+
+    def _laser_sequence_failed(
+        self,
+        context: str,
+        error: str,
+    ) -> None:
+        self.fault_latched = True
+        self.last_laser_off_confirmed = "OFF UNCONFIRMED" not in error
+        self.fail(f"{context}:\n{error}")
 
     def _start_exposure(self) -> None:
         self.paused_before_exposure = False
@@ -174,19 +478,54 @@ class ExperimentRunner(QObject):
 
         if self.exposure_remaining_s <= 0.0:
             self.exposure_timer.stop()
-            self._advance_to_next_well()
+
+            if self.stage_only:
+                self._complete_current_well()
+            else:
+                self.set_state(ExperimentState.SWITCHING_OFF)
+                self._send_laser_command(
+                    "off",
+                    0,
+                    self._after_exposure_off,
+                )
+
+    def _after_exposure_off(self, error: str) -> None:
+        if error:
+            self._laser_sequence_failed(
+                "Could not confirm emission OFF after exposure",
+                error,
+            )
+            return
+
+        self.last_laser_off_confirmed = True
+        self._complete_current_well()
+
+    def _complete_current_well(self) -> None:
+        current_well = self.current_well
+
+        if current_well is not None and current_well not in self.completed_wells:
+            self.completed_wells.append(current_well)
+
+        self._advance_to_next_well()
 
     def _advance_to_next_well(self) -> None:
         self.current_well_index += 1
 
         if self.current_well_index >= len(self.wells):
+            if not self.stage_only and not self.last_laser_off_confirmed:
+                self._laser_sequence_failed(
+                    "Homing refused",
+                    "Laser emission OFF was not confirmed.",
+                )
+                return
+
+            self.home_pending = True
             self.set_state(ExperimentState.HOMING)
             self.remaining_time_changed.emit(0.0)
             self.home_requested.emit()
             return
 
         current_well = self.current_well
-
         if current_well is None:
             self.fail("Could not determine the next well.")
             return
@@ -194,71 +533,151 @@ class ExperimentRunner(QObject):
         self.exposure_time_s = self.current_exposure_time_s
         self.exposure_remaining_s = self.exposure_time_s
         self.current_well_changed.emit(current_well)
-        self.set_state(ExperimentState.MOVING)
         self.remaining_time_changed.emit(self.remaining_time_s)
-        self.move_requested.emit(current_well)
+
+        self._move_current_well()
 
     def pause(self) -> None:
-        if self.state is ExperimentState.MOVING:
-            # The active movement cannot be interrupted safely.
-            # Pause immediately after arrival, before exposure.
-            self.pause_requested = True
+        if self.state not in {
+            ExperimentState.MOVING,
+            ExperimentState.SWITCHING_OFF,
+            ExperimentState.PREPARING,
+            ExperimentState.EXPOSING,
+        }:
             return
 
-        if self.state is not ExperimentState.EXPOSING:
+        self.pause_requested = True
+
+        if self.state is ExperimentState.EXPOSING:
+            self.exposure_timer.stop()
+            self.paused_before_exposure = False
+        else:
+            self.paused_before_exposure = True
+
+        if self.stage_only:
+            if self.movement_pending:
+                return
+
+            self.pause_requested = False
+            self.set_state(ExperimentState.PAUSED)
+            self.remaining_time_changed.emit(self.remaining_time_s)
             return
 
-        self.exposure_timer.stop()
-        self.paused_before_exposure = False
-        self.set_state(ExperimentState.PAUSED)
-        self.remaining_time_changed.emit(self.remaining_time_s)
+        self.laser_cancel.set()
+
+        # Keep MOVING displayed until physical movement finishes.
+        # notify_movement_finished() will then switch emission OFF
+        # and enter PAUSED before exposure.
+        if self.movement_pending:
+            return
+
+        self.set_state(ExperimentState.PAUSING)
+
+        if self._laser_pending is not None:
+            return
+
+        self._send_laser_command(
+            "off",
+            0,
+            self._after_pause_off,
+        )
 
     def resume(self) -> None:
         if self.state is not ExperimentState.PAUSED:
             return
 
         self.pause_requested = False
-        self._start_exposure()
+        self.laser_cancel.clear()
+
+        if self.stage_only:
+            self._start_exposure()
+            return
+
+        # Reconfirm OFF, reapply current and verify ON before
+        # continuing the remaining exposure.
+        self.last_laser_off_confirmed = False
+        self.set_state(ExperimentState.SWITCHING_OFF)
+        self._send_laser_command(
+            "off",
+            0,
+            self._after_arrival_off,
+        )
 
     def request_stop(self) -> None:
-        previous_state = self.state
+        if not self.is_running:
+            return
 
-        if previous_state not in {
-            ExperimentState.MOVING,
-            ExperimentState.EXPOSING,
-            ExperimentState.PAUSED,
-            ExperimentState.HOMING,
+        if self.state in {
+            ExperimentState.STOPPING,
+            ExperimentState.ERROR,
         }:
             return
 
-        self.exposure_timer.stop()
+        self.stop_requested = True
         self.pause_requested = False
-        self.paused_before_exposure = False
+        self.exposure_timer.stop()
+        self.laser_cancel.set()
         self.set_state(ExperimentState.STOPPING)
         self.remaining_time_changed.emit(0.0)
 
-        # An active movement or homing operation must finish safely.
-        if previous_state in {
-            ExperimentState.MOVING,
-            ExperimentState.HOMING,
-        }:
+        # Wait for physical movement, homing or the active serial
+        # transaction to finish. Its callback will continue shutdown.
+        if (
+            self.movement_pending
+            or self.home_pending
+            or self._laser_pending is not None
+        ):
             return
 
-        self.home_requested.emit()
+        if self.stage_only:
+            self.home_pending = True
+            self.home_requested.emit()
+            return
+
+        self._send_laser_command(
+            "off",
+            0,
+            self._after_stop_off,
+        )
 
     def notify_homing_finished(self) -> None:
-        if self.state is ExperimentState.STOPPING:
-            self.set_state(ExperimentState.STOPPED)
-            self.remaining_time_changed.emit(0.0)
-            self.experiment_stopped.emit()
+        if not self.home_pending:
             return
 
-        if self.state is not ExperimentState.HOMING:
+        self.home_pending = False
+
+        if self.stage_only:
+            self._finish_after_home()
             return
 
-        self.set_state(ExperimentState.COMPLETED)
+        # Final verification after stage movement.
+        self.set_state(ExperimentState.SWITCHING_OFF)
+        self._send_laser_command(
+            "off",
+            0,
+            self._after_final_off,
+        )
+
+    def _after_final_off(self, error: str) -> None:
+        if error:
+            self._laser_sequence_failed(
+                "Could not confirm final emission OFF",
+                error,
+            )
+            return
+
+        self.last_laser_off_confirmed = True
+        self._finish_after_home()
+
+    def _finish_after_home(self) -> None:
         self.remaining_time_changed.emit(0.0)
-        self.experiment_finished.emit()
+
+        if self.stop_requested:
+            self.set_state(ExperimentState.STOPPED)
+            self.experiment_stopped.emit()
+        else:
+            self.set_state(ExperimentState.COMPLETED)
+            self.experiment_finished.emit()
 
     def fail(self, message: str) -> None:
         self.exposure_timer.stop()
