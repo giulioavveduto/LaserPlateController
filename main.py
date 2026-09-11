@@ -42,7 +42,7 @@ from experiment.timing_assignment_widget import TimingAssignmentWidget
 from laser.laser_assignment_widget import LaserAssignmentWidget
 from experiment.start_dialog import StartExperimentDialog
 from experiment.run_report import write_csv_report
-
+from experiment.run_summary_widget import RunSummaryWidget
 
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -169,6 +169,9 @@ class MainWindow(QMainWindow):
             stretch=1,
         )
 
+        self.run_summary_widget = RunSummaryWidget()
+        status_layout.addWidget(self.run_summary_widget)
+
         self.experiment_status_plate_widget: WellPlateWidget | None = None
         self.status_tab_index = self.add_scroll_tab(
             status_page,
@@ -280,6 +283,7 @@ class MainWindow(QMainWindow):
         self.experiment_status_plate_layout.addWidget(
             self.experiment_status_plate_widget
         )
+        self.run_summary_widget.clear_summary()
         self.tabs.setCurrentIndex(self.status_tab_index)
 
     def save_run_report(self) -> Path | None:
@@ -1122,6 +1126,9 @@ class MainWindow(QMainWindow):
         state: ExperimentState,
     ) -> None:
         self.update_experiment_dashboard()
+        self.run_summary_widget.update_from_runner(
+            self.experiment_runner
+        )
         self.update_experiment_controls()
 
     def on_experiment_move_requested(self, well_name: str) -> None:
