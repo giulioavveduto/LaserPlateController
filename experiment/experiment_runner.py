@@ -266,6 +266,7 @@ class ExperimentRunner(QObject):
         self,
         protocol: ExperimentProtocol,
         stage_only: bool = True,
+        resolved_current_percents: dict[str, int] | None = None,
     ) -> None:
         if self.is_running:
             raise RuntimeError("An experiment is already running.")
@@ -298,19 +299,48 @@ class ExperimentRunner(QObject):
 
             setpoint = protocol.laser_setpoint_for(well)
 
-            if (
-                setpoint is None
-                or setpoint.mode != "current_percent"
-                or not math.isfinite(setpoint.value)
-                or not 0 <= setpoint.value <= 100
-                or not float(setpoint.value).is_integer()
-            ):
+            if setpoint is None:
                 raise ValueError(
-                    f"{well} requires an integer laser current " "between 0 and 100%."
+                    f"{well} requires a laser assignment."
                 )
 
-            current_percents.append(int(setpoint.value))
+            if setpoint.mode == "current_percent":
+                if (
+                    not math.isfinite(setpoint.value)
+                    or not 0 <= setpoint.value <= 100
+                    or not float(setpoint.value).is_integer()
+                ):
+                    raise ValueError(
+                        f"{well} requires an integer laser "
+                        "current between 0 and 100%."
+                    )
 
+                current_percent = int(setpoint.value)
+
+            else:
+                if (
+                    resolved_current_percents is None
+                    or well not in resolved_current_percents
+                ):
+                    raise ValueError(
+                        f"{well} requires a resolved calibrated "
+                        "laser current."
+                    )
+
+                current_percent = (
+                    resolved_current_percents[well]
+                )
+
+                if (
+                    type(current_percent) is not int
+                    or not 0 <= current_percent <= 100
+                ):
+                    raise ValueError(
+                        f"{well} has an invalid resolved "
+                        "laser current."
+                    )
+
+            current_percents.append(current_percent)
         self.exposure_timer.stop()
         self.laser_timeout.stop()
         self.laser_cancel.clear()

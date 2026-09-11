@@ -43,6 +43,8 @@ from laser.laser_assignment_widget import LaserAssignmentWidget
 from experiment.start_dialog import StartExperimentDialog
 from experiment.run_report import write_csv_report
 from experiment.run_summary_widget import RunSummaryWidget
+from laser.calibration_dialog import LaserCalibrationDialog
+from laser.power_calibration import LaserCalibrationStore
 
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -83,6 +85,7 @@ class MainWindow(QMainWindow):
         self.run_report_path: Path | None = None
 
         self.calibration_manager = CalibrationManager()
+        self.laser_calibration_store = LaserCalibrationStore()
         self.experiment_protocol = ExperimentProtocol(plate_type="96-well plate")
         self.experiment_runner = ExperimentRunner(self)
         self.current_protocol_path: Path | None = None
@@ -322,7 +325,11 @@ class MainWindow(QMainWindow):
                     item.widget().deleteLater()
         plate = PlateGeometry(self.experiment_protocol.plate_type)
         self.timing_editor = TimingAssignmentWidget(self.experiment_protocol, plate)
-        self.laser_editor = LaserAssignmentWidget(self.experiment_protocol, plate)
+        self.laser_editor = LaserAssignmentWidget(
+            self.experiment_protocol,
+            plate,
+            self.laser_calibration_store,
+        )
         self.timing_layout.addWidget(self.timing_editor)
         self.laser_assignment_layout.addWidget(self.laser_editor)
         self.timing_editor.protocol_changed.connect(self.on_assignments_changed)
@@ -385,7 +392,21 @@ class MainWindow(QMainWindow):
         self.developer_action.setChecked(False)
         self.developer_action.toggled.connect(self.on_developer_mode_changed)
         settings_menu.addAction(self.developer_action)
+        settings_menu.addSeparator()
+
+        self.laser_calibration_action = QAction(
+            "Laser power calibration...",
+            self,
+        )
+        self.laser_calibration_action.triggered.connect(
+            self.open_laser_calibration_dialog
+        )
+        settings_menu.addAction(
+            self.laser_calibration_action
+        )
+
         self.developer_indicator = QLabel("")
+
         self.statusBar().addPermanentWidget(self.developer_indicator)
         file_menu = self.menuBar().addMenu("&File")
 
@@ -404,6 +425,45 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self.save_action)
         file_menu.addAction(self.save_as_action)
+
+    def open_laser_calibration_dialog(self) -> None:
+        try:
+            dialog = LaserCalibrationDialog(
+                self.laser_calibration_store,
+                self,
+            )
+        except (OSError, ValueError, KeyError) as exc:
+            QMessageBox.critical(
+                self,
+                "Calibration loading error",
+                str(exc),
+            )
+            return
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        calibration = dialog.saved_calibration
+
+        if calibration is None:
+            return
+
+        QMessageBox.information(
+            self,
+            "Laser calibration saved",
+            (
+                "The new laser power calibration is active.\n\n"
+                f"Calibration ID: "
+                f"{calibration.calibration_id}\n"
+                f"Measured points: "
+                f"{len(calibration.points)}\n"
+                f"Power range: "
+                f"{calibration.minimum_power_w:g}–"
+                f"{calibration.maximum_power_w:g} W"
+            ),
+        )
+        if hasattr(self, "laser_editor"):
+            self.laser_editor.refresh_calibration()
 
     def on_developer_mode_changed(self, enabled: bool) -> None:
         self.developer_indicator.setText("DEVELOPER MODE" if enabled else "")
@@ -893,6 +953,9 @@ class MainWindow(QMainWindow):
             self.experiment_runner.start(
                 dialog.snapshot,
                 stage_only=dialog.stage_only,
+                resolved_current_percents=(
+                    dialog.resolved_current_percents
+                ),
             )
         except (RuntimeError, ValueError) as exc:
             QMessageBox.critical(

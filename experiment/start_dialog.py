@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from plates.plate_geometry import PlateGeometry
-
+from laser.setpoint_conversion import resolve_laser_setpoint
 
 def launch_problems(window, stage_only: bool) -> list[str]:
     protocol = window.experiment_protocol
@@ -79,12 +79,15 @@ def launch_problems(window, stage_only: bool) -> list[str]:
                 problems.append(f"{well}: laser assignment missing.")
             elif not math.isfinite(setpoint.value) or not setpoint.is_valid:
                 problems.append(f"{well}: invalid laser assignment.")
-            elif setpoint.mode != "current_percent":
-                problems.append(
-                    f"{well}: power calibration is not implemented; use current %."
-                )
-            elif not float(setpoint.value).is_integer():
-                problems.append(f"{well}: current must be an integer percentage.")
+            else:
+                try:
+                    resolve_laser_setpoint(
+                        setpoint,
+                        plate,
+                        window.laser_calibration_store,
+                    )
+                except (OSError, ValueError, KeyError) as exc:
+                    problems.append(f"{well}: {exc}")
         if not window.laser_connected:
             problems.append("Connect the laser or laser simulator.")
         stage_is_simulator = window.stage_mode_combo.currentText() == "Simulator"
@@ -108,6 +111,8 @@ class StartExperimentDialog(QDialog):
         self.run_directory = None
         self.stage_only = True
         self.export_csv_requested = True
+        self.resolved_current_percents: dict[str, int] = {}
+        self.used_laser_calibrations: dict[str, dict[str, object]] = {}
         self.setWindowTitle("Review experiment before starting")
         self.resize(650, 500)
         layout = QVBoxLayout(self)
@@ -141,7 +146,6 @@ class StartExperimentDialog(QDialog):
             "I confirm that the enclosure is closed, the optical path is "
             "secured, and all required laser safety measures are active."
         )
-        layout.addWidget(self.irradiation_safety)
         layout.addWidget(self.irradiation_safety)
         layout.addWidget(self.key_off)
         layout.addWidget(
@@ -200,6 +204,28 @@ class StartExperimentDialog(QDialog):
             if problems
             else "Protocol valid for a stage-only test. Start the test?"
         )
+        if problems:
+            validation_text = "\n".join(problems)
+        elif stage_only:
+            validation_text = (
+                "Protocol valid for a stage-only test. "
+                "Start the test?"
+            )
+        else:
+            validation_text = (
+                "Protocol valid for automatic irradiation. "
+                "All laser assignments were resolved successfully."
+            )
+
+        self.problems.setPlainText(validation_text)
+
+        self.buttons.button(
+            QDialogButtonBox.StandardButton.Yes
+        ).setText(
+            "Yes, start stage-only test"
+            if stage_only
+            else "Yes, start experiment"
+        )
         self.buttons.button(QDialogButtonBox.StandardButton.Yes).setEnabled(
             not problems
         )
@@ -214,6 +240,55 @@ class StartExperimentDialog(QDialog):
         self.export_csv_requested = self.export_csv.isChecked()
         snapshot = deepcopy(self.window.experiment_protocol)
         snapshot.name = self.name.text().strip()
+        self.resolved_current_percents = {}
+        self.used_laser_calibrations = {}
+
+        if not self.stage_only:
+            try:
+                plate = PlateGeometry(snapshot.plate_type)
+
+                for well in snapshot.selected_wells:
+                    setpoint = snapshot.laser_setpoint_for(
+                        well
+                    )
+
+                    if setpoint is None:
+                        raise ValueError(
+                            f"{well}: laser assignment missing."
+                        )
+
+                    resolved = resolve_laser_setpoint(
+                        setpoint,
+                        plate,
+                        self.window.laser_calibration_store,
+                    )
+
+                    self.resolved_current_percents[
+                        well
+                    ] = resolved.current_percent
+
+                    if resolved.calibration_id is not None:
+                        calibration = (
+                            self.window
+                            .laser_calibration_store
+                            .get_calibration(
+                                resolved.calibration_id
+                            )
+                        )
+                        self.used_laser_calibrations[
+                            resolved.calibration_id
+                        ] = calibration.to_dict()
+
+            except (OSError, ValueError, KeyError) as exc:
+                QMessageBox.critical(
+                    self,
+                    "Laser assignment error",
+                    (
+                        "The experiment was not started.\n\n"
+                        f"{exc}"
+                    ),
+                )
+                return
         stamp = datetime.now().astimezone()
         slug = (
             re.sub(r"[^A-Za-z0-9_-]+", "_", snapshot.name).strip("_")[:60]
@@ -240,6 +315,12 @@ class StartExperimentDialog(QDialog):
                     )
                 ),
                 "csv_report_requested": self.export_csv_requested,
+                "resolved_current_percent_by_well": dict(
+                    self.resolved_current_percents
+                ),
+                "laser_calibrations": dict(
+                    self.used_laser_calibrations
+                ),
             }
             with (directory / "protocol.lpp").open("x", encoding="utf-8") as file:
                 json.dump(data, file, indent=4, allow_nan=False)

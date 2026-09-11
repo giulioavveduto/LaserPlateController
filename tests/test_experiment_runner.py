@@ -292,7 +292,36 @@ class ExperimentRunnerTests(unittest.TestCase):
             "physical safety key",
             errors[-1].lower(),
         )
+    def test_power_assignment_accepts_resolved_current(
+        self,
+    ) -> None:
+        runner = ExperimentRunner()
+        laser = AutomaticLaser(runner)
 
+        protocol = make_protocol(["A1"])
+        protocol.set_laser_setpoint_for_wells(
+            ["A1"],
+            LaserSetpoint(
+                mode="power_w",
+                value=1.44,
+                calibration_id="test-calibration",
+            ),
+        )
+
+        runner.start(
+            protocol,
+            stage_only=False,
+            resolved_current_percents={"A1": 51},
+        )
+        runner.notify_movement_finished()
+
+        self.assertEqual(runner.current_percent, 51)
+        self.assertIn(("current", 51), laser.commands)
+        self.assertIn(("on", 51), laser.commands)
+        self.assertEqual(
+            runner.state,
+            ExperimentState.EXPOSING,
+        )
 
 if __name__ == "__main__":
     unittest.main()

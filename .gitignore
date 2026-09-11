@@ -18,6 +18,8 @@ Thumbs.db
 
 # Local experiment outputs
 logs/
+runs/
 
 # Local hardware calibration
 calibration/calibrations.json
+calibration/laser_power_calibrations.json

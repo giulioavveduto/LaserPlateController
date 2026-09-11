@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import json
 import re
 from pathlib import Path
@@ -87,6 +88,11 @@ class PlateGeometry:
         y_mm = column_index * self.pitch_x_mm
 
         return x_mm, y_mm
+
+    @property
+    def well_area_cm2(self) -> float:
+        radius_cm = self.well_diameter_mm / 20.0
+        return math.pi * radius_cm**2
 
     def get_all_wells(self) -> list[str]:
         wells: list[str] = []
