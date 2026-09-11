@@ -1026,17 +1026,42 @@ class MainWindow(QMainWindow):
         )
 
     def on_experiment_finished(self) -> None:
+        runner = self.experiment_runner
         self.update_experiment_dashboard()
-        self.statusBar().showMessage(
-            "Experiment completed — stage homed",
-            10000,
-        )
         self.update_experiment_controls()
+
+        if runner.stage_only:
+            title = "Stage-only test completed"
+            result_text = "No irradiation was requested."
+            status_text = "Stage-only test completed — stage homed"
+        elif any(percent > 0 for percent in runner.current_percents):
+            title = "Experiment completed"
+            result_text = (
+                "The automatic irradiation sequence completed successfully.\n"
+                "Laser emission was controller-confirmed for the programmed "
+                "non-zero wells and confirmed OFF at completion."
+            )
+            status_text = "Experiment completed — stage homed and laser confirmed OFF"
+        else:
+            title = "Experiment completed"
+            result_text = (
+                "All wells were configured at 0%. " "Laser emission remained OFF."
+            )
+            status_text = (
+                "0% experiment completed — stage homed and laser confirmed OFF"
+            )
+
+        self.statusBar().showMessage(status_text, 10000)
+
         QMessageBox.information(
             self,
-            "Stage-only test completed",
-            f"{len(self.experiment_runner.wells)} wells completed; stage returned home.\n"
-            f"No irradiation was performed.\nProtocol snapshot: {self.run_directory}",
+            title,
+            (
+                f"{len(runner.completed_wells)} / "
+                f"{len(runner.wells)} wells completed.\n\n"
+                f"{result_text}\n\n"
+                f"Protocol snapshot: {self.run_directory}"
+            ),
         )
 
     def on_current_well_changed(self, well_name: str) -> None:
@@ -1322,7 +1347,8 @@ class MainWindow(QMainWindow):
         if (
             not self.stage_connected
             or not self.stage_homed
-            or self.stage_busyor(
+            or self.stage_busy
+            or (
                 self.experiment_runner.fault_latched
                 and not self.experiment_runner.last_laser_off_confirmed
             )
@@ -1332,9 +1358,13 @@ class MainWindow(QMainWindow):
         self.request_move_stage.emit(dx_mm, dy_mm)
 
     def confirm_home_stage(self) -> None:
-        if not self.stage_connected or self.stage_busyor(
-            self.experiment_runner.fault_latched
-            and not self.experiment_runner.last_laser_off_confirmed
+        if (
+            not self.stage_connected
+            or self.stage_busy
+            or (
+                self.experiment_runner.fault_latched
+                and not self.experiment_runner.last_laser_off_confirmed
+            )
         ):
             return
 
@@ -1548,7 +1578,8 @@ class MainWindow(QMainWindow):
         if (
             not self.stage_connected
             or not self.stage_homed
-            or self.stage_busyor(
+            or self.stage_busy
+            or (
                 self.experiment_runner.fault_latched
                 and not self.experiment_runner.last_laser_off_confirmed
             )

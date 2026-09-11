@@ -136,6 +136,12 @@ class StartExperimentDialog(QDialog):
         self.key_off = QCheckBox(
             "I confirm that the physical laser is switched off or its safety key is OFF."
         )
+        self.irradiation_safety = QCheckBox(
+            "I confirm that the enclosure is closed, the optical path is "
+            "secured, and all required laser safety measures are active."
+        )
+        layout.addWidget(self.irradiation_safety)
+        layout.addWidget(self.irradiation_safety)
         layout.addWidget(self.key_off)
         layout.addWidget(
             QLabel(
@@ -154,6 +160,7 @@ class StartExperimentDialog(QDialog):
         self.mode.currentIndexChanged.connect(self.refresh)
         self.name.textChanged.connect(self.refresh)
         self.key_off.toggled.connect(self.refresh)
+        self.irradiation_safety.toggled.connect(self.refresh)
         self.refresh()
 
     def choose_folder(self):
@@ -165,12 +172,18 @@ class StartExperimentDialog(QDialog):
 
     def refresh(self):
         stage_only = bool(self.mode.currentData())
+        real_irradiation = (
+            not stage_only and self.window.stage_mode_combo.currentText() != "Simulator"
+        )
         self.key_off.setVisible(stage_only)
+        self.irradiation_safety.setVisible(real_irradiation)
         problems = launch_problems(self.window, stage_only)
         if not self.name.text().strip():
             problems.append("Enter a protocol name.")
         if stage_only and not self.key_off.isChecked():
             problems.append("Confirm that the physical laser is OFF.")
+        if real_irradiation and not self.irradiation_safety.isChecked():
+            problems.append("Confirm the laser enclosure and safety conditions.")
         protocol = self.window.experiment_protocol
         self.summary.setText(
             f"{len(protocol.selected_wells)} wells · Stage: {self.window.stage_mode_combo.currentText()}\n"
@@ -190,6 +203,9 @@ class StartExperimentDialog(QDialog):
         self.refresh()
         if not self.buttons.button(QDialogButtonBox.StandardButton.Yes).isEnabled():
             return
+
+        self.stage_only = bool(self.mode.currentData())
+
         snapshot = deepcopy(self.window.experiment_protocol)
         snapshot.name = self.name.text().strip()
         stamp = datetime.now().astimezone()
@@ -228,4 +244,3 @@ class StartExperimentDialog(QDialog):
         self.snapshot = snapshot
         self.run_directory = directory
         self.accept()
-        self.stage_only = bool(self.mode.currentData())
