@@ -48,14 +48,10 @@ class WellButton(QPushButton):
             hover_rule = ""
 
         elif self.execution_state == "current":
-                background_color = (
-                    "#fff0b3"
-                    if self.pulse_highlighted
-                    else "#f28c00"
-                )
-                border_color = "#a64b00"
-                font_weight = "bold"
-                hover_rule = ""
+            background_color = "#fff0b3" if self.pulse_highlighted else "#f28c00"
+            border_color = "#a64b00"
+            font_weight = "bold"
+            hover_rule = ""
 
         elif self.execution_state == "pending":
             background_color = "#d9dde2"
@@ -79,8 +75,7 @@ class WellButton(QPushButton):
                 }
             """
 
-        self.setStyleSheet(
-            f"""
+        self.setStyleSheet(f"""
             QPushButton {{
                 border-radius: 15px;
                 border: 2px solid {border_color};
@@ -89,8 +84,7 @@ class WellButton(QPushButton):
             }}
 
             {hover_rule}
-            """
-        )
+            """)
 
     def set_execution_state(
         self,
@@ -104,9 +98,7 @@ class WellButton(QPushButton):
         }
 
         if execution_state not in valid_states:
-            raise ValueError(
-                f"Invalid well execution state: {execution_state}"
-            )
+            raise ValueError(f"Invalid well execution state: {execution_state}")
 
         self.execution_state = execution_state
         self.update_style()
@@ -154,10 +146,14 @@ class WellPlateWidget(QWidget):
         self,
         plate: PlateGeometry,
         parent: QWidget | None = None,
+        *,
+        interactive: bool = True,
     ) -> None:
         super().__init__(parent)
 
         self.plate = plate
+        self.interactive = interactive
+        self.selected_count_label: QLabel | None = None
         self.well_buttons: dict[str, WellButton] = {}
         self.drag_target_state: bool | None = None
         self.pulsing_well: str | None = None
@@ -165,27 +161,32 @@ class WellPlateWidget(QWidget):
 
         self.pulse_timer = QTimer(self)
         self.pulse_timer.setInterval(500)
-        self.pulse_timer.timeout.connect(self._advance_pulse)        
+        self.pulse_timer.timeout.connect(self._advance_pulse)
         main_layout = QVBoxLayout(self)
 
-        controls_layout = QGridLayout()
+        if self.interactive:
+            controls_layout = QGridLayout()
 
-        self.selected_count_label = QLabel("Selected wells: 0")
-        controls_layout.addWidget(self.selected_count_label, 0, 0)
+            self.selected_count_label = QLabel("Selected wells: 0")
+            controls_layout.addWidget(
+                self.selected_count_label,
+                0,
+                0,
+            )
 
-        select_all_button = QPushButton("Select all")
-        select_all_button.clicked.connect(self.select_all)
-        controls_layout.addWidget(select_all_button, 0, 1)
+            select_all_button = QPushButton("Select all")
+            select_all_button.clicked.connect(self.select_all)
+            controls_layout.addWidget(select_all_button, 0, 1)
 
-        clear_button = QPushButton("Clear selection")
-        clear_button.clicked.connect(self.clear_selection)
-        controls_layout.addWidget(clear_button, 0, 2)
+            clear_button = QPushButton("Clear selection")
+            clear_button.clicked.connect(self.clear_selection)
+            controls_layout.addWidget(clear_button, 0, 2)
 
-        invert_button = QPushButton("Invert selection")
-        invert_button.clicked.connect(self.invert_selection)
-        controls_layout.addWidget(invert_button, 0, 3)
+            invert_button = QPushButton("Invert selection")
+            invert_button.clicked.connect(self.invert_selection)
+            controls_layout.addWidget(invert_button, 0, 3)
 
-        main_layout.addLayout(controls_layout)
+            main_layout.addLayout(controls_layout)
 
         self.plate_layout = QGridLayout()
         self.plate_layout.setHorizontalSpacing(8)
@@ -201,17 +202,21 @@ class WellPlateWidget(QWidget):
         self.plate_layout.addWidget(corner_label, 0, 0)
 
         for column in range(1, self.plate.columns + 1):
-            column_button = QPushButton(str(column))
-            column_button.setToolTip(f"Select or deselect column {column}")
-            column_button.setFixedHeight(28)
-            column_button.clicked.connect(
-                lambda checked=False, current_column=column: self.toggle_column(
-                    current_column
+            if self.interactive:
+                column_header = QPushButton(str(column))
+                column_header.setToolTip(f"Select or deselect column {column}")
+                column_header.setFixedHeight(28)
+                column_header.clicked.connect(
+                    lambda checked=False, current_column=column: self.toggle_column(
+                        current_column
+                    )
                 )
-            )
+            else:
+                column_header = QLabel(str(column))
+                column_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             self.plate_layout.addWidget(
-                column_button,
+                column_header,
                 0,
                 column,
             )
@@ -219,17 +224,21 @@ class WellPlateWidget(QWidget):
         for row_index in range(self.plate.rows):
             row_letter = chr(ord("A") + row_index)
 
-            row_button = QPushButton(row_letter)
-            row_button.setToolTip(f"Select or deselect row {row_letter}")
-            row_button.setFixedWidth(34)
-            row_button.clicked.connect(
-                lambda checked=False, current_row=row_letter: self.toggle_row(
-                    current_row
+            if self.interactive:
+                row_header = QPushButton(row_letter)
+                row_header.setToolTip(f"Select or deselect row {row_letter}")
+                row_header.setFixedWidth(34)
+                row_header.clicked.connect(
+                    lambda checked=False, current_row=row_letter: self.toggle_row(
+                        current_row
+                    )
                 )
-            )
+            else:
+                row_header = QLabel(row_letter)
+                row_header.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             self.plate_layout.addWidget(
-                row_button,
+                row_header,
                 row_index + 1,
                 0,
             )
@@ -238,10 +247,18 @@ class WellPlateWidget(QWidget):
                 well_name = f"{row_letter}{column}"
                 button = WellButton(well_name)
 
-                button.drag_started.connect(self._start_drag)
-                button.drag_entered.connect(self._apply_drag_selection)
-                button.drag_finished.connect(self._finish_drag)
-                button.toggled.connect(self._emit_selection)
+                if self.interactive:
+                    button.drag_started.connect(self._start_drag)
+                    button.drag_entered.connect(self._apply_drag_selection)
+                    button.drag_finished.connect(self._finish_drag)
+                    button.toggled.connect(self._emit_selection)
+                else:
+                    button.setCheckable(False)
+                    button.setCursor(Qt.CursorShape.ArrowCursor)
+                    button.setAttribute(
+                        Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                        True,
+                    )
 
                 self.well_buttons[well_name] = button
 
@@ -280,9 +297,7 @@ class WellPlateWidget(QWidget):
         pulsing: bool,
     ) -> None:
         normalized_well = (
-            self.plate.normalize_well_name(well_name)
-            if well_name is not None
-            else None
+            self.plate.normalize_well_name(well_name) if well_name is not None else None
         )
 
         if (
@@ -338,8 +353,7 @@ class WellPlateWidget(QWidget):
         self.stop_execution_pulse()
 
         execution_wells = {
-            self.plate.normalize_well_name(well_name)
-            for well_name in well_names
+            self.plate.normalize_well_name(well_name) for well_name in well_names
         }
 
         for well_name, button in self.well_buttons.items():
@@ -355,8 +369,7 @@ class WellPlateWidget(QWidget):
         completed_wells: Iterable[str],
     ) -> None:
         normalized_completed = {
-            self.plate.normalize_well_name(well_name)
-            for well_name in completed_wells
+            self.plate.normalize_well_name(well_name) for well_name in completed_wells
         }
 
         normalized_current = (
@@ -376,7 +389,7 @@ class WellPlateWidget(QWidget):
     def clear_execution_display(self) -> None:
         self.stop_execution_pulse()
         for button in self.well_buttons.values():
-            button.set_execution_state(None)        
+            button.set_execution_state(None)
 
     def get_selected_wells(self) -> list[str]:
         return [
@@ -448,5 +461,6 @@ class WellPlateWidget(QWidget):
     def _emit_selection(self) -> None:
         selected_wells = self.get_selected_wells()
 
-        self.selected_count_label.setText(f"Selected wells: {len(selected_wells)}")
+        if self.selected_count_label is not None:
+            self.selected_count_label.setText(f"Selected wells: {len(selected_wells)}")
         self.selection_changed.emit(selected_wells)

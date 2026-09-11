@@ -126,7 +126,8 @@ class MainWindow(QMainWindow):
         )
         notice = QLabel(
             "Per-well laser settings are saved with the protocol. "
-            "Automatic laser emission is not enabled in this version."
+            "During automatic execution, emission is enabled only for "
+            "non-zero current assignments."
         )
         notice.setWordWrap(True)
         laser_layout.addWidget(notice)
@@ -138,11 +139,38 @@ class MainWindow(QMainWindow):
         self.add_scroll_tab(laser_page, "Laser")
         self.rebuild_assignment_editors()
 
+        status_page = QWidget()
+        status_layout = QVBoxLayout(status_page)
+
         self.experiment_designer = ExperimentDesignerWidget(self.experiment_protocol)
         self.experiment_designer.protocol_changed.connect(
             self.update_start_button_state
         )
-        main_layout.addWidget(self.experiment_designer)
+        status_layout.addWidget(self.experiment_designer)
+
+        self.experiment_status_plate_container = QWidget()
+        self.experiment_status_plate_layout = QVBoxLayout(
+            self.experiment_status_plate_container
+        )
+        self.experiment_status_plate_layout.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
+        )
+        self.experiment_status_plate_layout.addWidget(
+            QLabel("No experiment has been started in this session.")
+        )
+        status_layout.addWidget(
+            self.experiment_status_plate_container,
+            stretch=1,
+        )
+
+        self.experiment_status_plate_widget: WellPlateWidget | None = None
+        self.status_tab_index = self.add_scroll_tab(
+            status_page,
+            "Experiment status",
+        )
 
         experiment_controls_layout = QHBoxLayout()
 
@@ -217,11 +245,39 @@ class MainWindow(QMainWindow):
 
         self.create_laser_thread()
 
-    def add_scroll_tab(self, page: QWidget, title: str) -> None:
+    def add_scroll_tab(self, page: QWidget, title: str) -> int:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
-        self.tabs.addTab(scroll, title)
+        return self.tabs.addTab(scroll, title)
+
+    def prepare_experiment_status(
+        self,
+        protocol: ExperimentProtocol,
+    ) -> None:
+        while self.experiment_status_plate_layout.count():
+            item = self.experiment_status_plate_layout.takeAt(0)
+
+            if item is None:
+                continue
+
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
+
+        plate = PlateGeometry(protocol.plate_type)
+
+        self.experiment_status_plate_widget = WellPlateWidget(
+            plate,
+            interactive=False,
+        )
+        self.experiment_status_plate_widget.prepare_execution(protocol.selected_wells)
+
+        self.experiment_status_plate_layout.addWidget(
+            self.experiment_status_plate_widget
+        )
+        self.tabs.setCurrentIndex(self.status_tab_index)
 
     def rebuild_assignment_editors(self) -> None:
         if not hasattr(self, "laser_assignment_layout"):
@@ -797,10 +853,7 @@ class MainWindow(QMainWindow):
         self.run_directory = dialog.run_directory
         self._stopped_interrupted_well = None
 
-        if self.current_plate_widget is not None:
-            self.current_plate_widget.prepare_execution(
-                self.experiment_protocol.selected_wells
-            )
+        self.prepare_experiment_status(dialog.snapshot)
 
         try:
             self.experiment_runner.start(
@@ -979,7 +1032,9 @@ class MainWindow(QMainWindow):
         }:
             current_exposure_remaining_s = runner.exposure_remaining_s
 
-        if self.current_plate_widget is not None:
+        status_plate = self.experiment_status_plate_widget
+
+        if status_plate is not None:
             completed_well_names = list(runner.completed_wells)
 
             if runner.state in {
@@ -996,20 +1051,25 @@ class MainWindow(QMainWindow):
             elif runner.state in {
                 ExperimentState.STOPPING,
                 ExperimentState.STOPPED,
+                ExperimentState.ERROR,
             }:
-                displayed_current_well = getattr(
-                    self,
-                    "_stopped_interrupted_well",
-                    None,
+                displayed_current_well = (
+                    runner.current_well
+                    if runner.state is ExperimentState.ERROR
+                    else getattr(
+                        self,
+                        "_stopped_interrupted_well",
+                        None,
+                    )
                 )
             else:
                 displayed_current_well = None
 
-            self.current_plate_widget.update_execution_display(
+            status_plate.update_execution_display(
                 current_well=displayed_current_well,
                 completed_wells=completed_well_names,
             )
-            self.current_plate_widget.set_current_well_pulsing(
+            status_plate.set_current_well_pulsing(
                 runner.current_well,
                 runner.state is ExperimentState.EXPOSING,
             )
