@@ -923,12 +923,43 @@ class MainWindow(QMainWindow):
         self.update_start_button_state()
 
     def on_experiment_stopped(self) -> None:
+        runner = self.experiment_runner
+        completed_count = len(runner.completed_wells)
+        total_count = len(runner.wells)
+
+        interrupted_well = getattr(
+            self,
+            "_stopped_interrupted_well",
+            None,
+        )
+
+        if interrupted_well is None:
+            interruption_text = "No well was partially exposed when Stop was requested."
+        else:
+            interruption_text = f"Exposure of well {interrupted_well} was interrupted."
+
+        if runner.stage_only:
+            shutdown_text = "The stage returned home safely."
+        else:
+            shutdown_text = "Laser emission OFF was confirmed before and after homing."
+
         self.update_experiment_dashboard()
         self.statusBar().showMessage(
-            "Experiment stopped — stage homed",
+            "Experiment stopped safely",
             10000,
         )
         self.update_experiment_controls()
+
+        QMessageBox.information(
+            self,
+            "Experiment stopped",
+            (
+                f"{completed_count} / {total_count} wells completed.\n"
+                f"{interruption_text}\n"
+                f"{shutdown_text}\n\n"
+                f"Protocol snapshot:\n{self.run_directory}"
+            ),
+        )
 
     def update_experiment_dashboard(self) -> None:
         runner = self.experiment_runner
