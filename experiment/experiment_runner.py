@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from enum import Enum, auto
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
@@ -44,6 +45,8 @@ class ExperimentRunner(QObject):
         self.exposure_times_s: list[float] = []
         self.current_percents: list[int] = []
         self.completed_wells: list[str] = []
+        self.executed_times_s: dict[str, float] = {}
+        self._exposure_started_at: float | None = None
 
         self.stage_only = True
         self.stop_requested = False
@@ -318,6 +321,8 @@ class ExperimentRunner(QObject):
         self.exposure_times_s = exposure_times
         self.current_percents = current_percents
         self.completed_wells = []
+        self.executed_times_s = {well: 0.0 for well in self.wells}
+        self._exposure_started_at = None
 
         self.current_well_index = 0
         self.exposure_time_s = self.current_exposure_time_s
@@ -506,25 +511,56 @@ class ExperimentRunner(QObject):
     ) -> None:
         self.fail(f"{context}:\n{error}")
 
+    def _accumulate_executed_time(self) -> None:
+        if self._exposure_started_at is None:
+            return
+
+        now = time.monotonic()
+        elapsed_s = max(
+            0.0,
+            now - self._exposure_started_at,
+        )
+        self._exposure_started_at = now
+
+        current_well = self.current_well
+        if current_well is None:
+            return
+
+        planned_s = self.current_exposure_time_s
+        previous_s = self.executed_times_s.get(
+            current_well,
+            0.0,
+        )
+        executed_s = min(
+            planned_s,
+            previous_s + elapsed_s,
+        )
+
+        self.executed_times_s[current_well] = executed_s
+        self.exposure_remaining_s = max(
+            0.0,
+            planned_s - executed_s,
+        )
+
     def _start_exposure(self) -> None:
         self.paused_before_exposure = False
         self.set_state(ExperimentState.EXPOSING)
         self.remaining_time_changed.emit(self.remaining_time_s)
+        self._exposure_started_at = time.monotonic()
         self.exposure_timer.start()
 
     def _update_exposure(self) -> None:
         if self.state is not ExperimentState.EXPOSING:
             self.exposure_timer.stop()
+            self._exposure_started_at = None
             return
 
-        self.exposure_remaining_s = max(
-            0.0,
-            self.exposure_remaining_s - 0.1,
-        )
+        self._accumulate_executed_time()
         self.remaining_time_changed.emit(self.remaining_time_s)
 
         if self.exposure_remaining_s <= 0.0:
             self.exposure_timer.stop()
+            self._exposure_started_at = None
 
             if self.stage_only:
                 self._complete_current_well()
@@ -549,6 +585,8 @@ class ExperimentRunner(QObject):
 
     def _complete_current_well(self) -> None:
         current_well = self.current_well
+        if current_well is not None:
+            self.executed_times_s[current_well] = self.current_exposure_time_s
 
         if current_well is not None and current_well not in self.completed_wells:
             self.completed_wells.append(current_well)
@@ -596,7 +634,9 @@ class ExperimentRunner(QObject):
         self.pause_requested = True
 
         if self.state is ExperimentState.EXPOSING:
+            self._accumulate_executed_time()
             self.exposure_timer.stop()
+            self._exposure_started_at = None
             self.paused_before_exposure = False
         else:
             self.paused_before_exposure = True
@@ -660,6 +700,10 @@ class ExperimentRunner(QObject):
         }:
             return
 
+        if self.state is ExperimentState.EXPOSING:
+            self._accumulate_executed_time()
+
+        self._exposure_started_at = None
         self.stop_requested = True
         self.pause_requested = False
         self.exposure_timer.stop()
@@ -727,6 +771,11 @@ class ExperimentRunner(QObject):
             self.experiment_finished.emit()
 
     def fail(self, message: str) -> None:
+        if self.state is ExperimentState.EXPOSING:
+            self._accumulate_executed_time()
+
+        self._exposure_started_at = None
+
         self.exposure_timer.stop()
         self.pause_requested = False
         self.stop_requested = False

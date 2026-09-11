@@ -107,6 +107,7 @@ class StartExperimentDialog(QDialog):
         self.snapshot = None
         self.run_directory = None
         self.stage_only = True
+        self.export_csv_requested = True
         self.setWindowTitle("Review experiment before starting")
         self.resize(650, 500)
         layout = QVBoxLayout(self)
@@ -154,6 +155,11 @@ class StartExperimentDialog(QDialog):
         self.buttons.button(QDialogButtonBox.StandardButton.Yes).setText(
             "Yes, start test"
         )
+        self.export_csv = QCheckBox(
+            "Create a CSV run summary when the experiment ends."
+        )
+        self.export_csv.setChecked(True)
+        layout.addWidget(self.export_csv)
         self.buttons.accepted.connect(self.confirm_start)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
@@ -205,7 +211,7 @@ class StartExperimentDialog(QDialog):
             return
 
         self.stage_only = bool(self.mode.currentData())
-
+        self.export_csv_requested = self.export_csv.isChecked()
         snapshot = deepcopy(self.window.experiment_protocol)
         snapshot.name = self.name.text().strip()
         stamp = datetime.now().astimezone()
@@ -233,6 +239,7 @@ class StartExperimentDialog(QDialog):
                         "controller-confirmed emission."
                     )
                 ),
+                "csv_report_requested": self.export_csv_requested,
             }
             with (directory / "protocol.lpp").open("x", encoding="utf-8") as file:
                 json.dump(data, file, indent=4, allow_nan=False)
