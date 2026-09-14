@@ -83,9 +83,7 @@ class LaserCalibrationDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(
             3,
             QHeaderView.ResizeMode.Stretch,
@@ -99,50 +97,28 @@ class LaserCalibrationDialog(QDialog):
                 for point in self.active_calibration.points
             }
 
-        for row, current_percent in enumerate(
-            self.CURRENT_LEVELS
-        ):
+        for row, current_percent in enumerate(self.CURRENT_LEVELS):
             checkbox = QCheckBox()
             checkbox_container = QWidget()
-            checkbox_layout = QHBoxLayout(
-                checkbox_container
-            )
+            checkbox_layout = QHBoxLayout(checkbox_container)
             checkbox_layout.setContentsMargins(0, 0, 0, 0)
-            checkbox_layout.setAlignment(
-                Qt.AlignmentFlag.AlignCenter
-            )
+            checkbox_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             checkbox_layout.addWidget(checkbox)
 
-            current_item = QTableWidgetItem(
-                str(current_percent)
-            )
-            current_item.setTextAlignment(
-                Qt.AlignmentFlag.AlignCenter
-            )
-            current_item.setFlags(
-                current_item.flags()
-                & ~Qt.ItemFlag.ItemIsEditable
-            )
+            current_item = QTableWidgetItem(str(current_percent))
+            current_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            current_item.setFlags(current_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-            previous_power = previous_values.get(
-                current_percent
-            )
+            previous_power = previous_values.get(current_percent)
             previous_item = QTableWidgetItem(
-                "—"
-                if previous_power is None
-                else f"{previous_power:.4f}"
+                "—" if previous_power is None else f"{previous_power:.3f}"
             )
-            previous_item.setTextAlignment(
-                Qt.AlignmentFlag.AlignCenter
-            )
-            previous_item.setFlags(
-                previous_item.flags()
-                & ~Qt.ItemFlag.ItemIsEditable
-            )
+            previous_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            previous_item.setFlags(previous_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
             power_spinbox = FocusWheelDoubleSpinBox()
-            power_spinbox.setDecimals(4)
-            power_spinbox.setSingleStep(0.01)
+            power_spinbox.setDecimals(3)
+            power_spinbox.setSingleStep(0.001)
             power_spinbox.setSuffix(" W")
 
             if current_percent == 0:
@@ -152,10 +128,7 @@ class LaserCalibrationDialog(QDialog):
                 power_spinbox.setRange(0.0, 1000.0)
 
             checkbox.toggled.connect(
-                lambda checked,
-                spinbox=power_spinbox,
-                percentage=current_percent:
-                spinbox.setEnabled(
+                lambda checked, spinbox=power_spinbox, percentage=current_percent: spinbox.setEnabled(
                     checked and percentage != 0
                 )
             )
@@ -180,9 +153,7 @@ class LaserCalibrationDialog(QDialog):
             )
 
             self.checkboxes[current_percent] = checkbox
-            self.power_spinboxes[current_percent] = (
-                power_spinbox
-            )
+            self.power_spinboxes[current_percent] = power_spinbox
 
         layout.addWidget(self.table)
 
@@ -190,44 +161,28 @@ class LaserCalibrationDialog(QDialog):
 
         every_five_button = QPushButton("Every 5%")
         every_five_button.clicked.connect(
-            lambda: self._select_levels(
-                set(self.CURRENT_LEVELS)
-            )
+            lambda: self._select_levels(set(self.CURRENT_LEVELS))
         )
         preset_layout.addWidget(every_five_button)
 
         every_ten_button = QPushButton("Every 10%")
         every_ten_button.clicked.connect(
             lambda: self._select_levels(
-                {
-                    value
-                    for value in self.CURRENT_LEVELS
-                    if value % 10 == 0
-                }
+                {value for value in self.CURRENT_LEVELS if value % 10 == 0}
             )
         )
         preset_layout.addWidget(every_ten_button)
 
-        sparse_button = QPushButton(
-            "0, 10, 30, 50, 70, 90%"
-        )
-        sparse_button.clicked.connect(
-            lambda: self._select_levels(
-                {10, 30, 50, 70, 90}
-            )
-        )
+        sparse_button = QPushButton("0, 10, 30, 50, 70, 90%")
+        sparse_button.clicked.connect(lambda: self._select_levels({10, 30, 50, 70, 90}))
         preset_layout.addWidget(sparse_button)
 
         restore_button = QPushButton("Restore previous")
-        restore_button.clicked.connect(
-            self._restore_previous
-        )
+        restore_button.clicked.connect(self._restore_previous)
         preset_layout.addWidget(restore_button)
 
         clear_button = QPushButton("Clear")
-        clear_button.clicked.connect(
-            lambda: self._select_levels(set())
-        )
+        clear_button.clicked.connect(lambda: self._select_levels(set()))
         preset_layout.addWidget(clear_button)
 
         layout.addLayout(preset_layout)
@@ -240,21 +195,15 @@ class LaserCalibrationDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        save_button = buttons.button(
-            QDialogButtonBox.StandardButton.Save
-        )
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         save_button.setText("Save as active calibration")
 
         self._update_active_label()
 
     def _update_active_label(self) -> None:
         if self.active_calibration is None:
-            self.active_label.setText(
-                "No active laser calibration."
-            )
-            self.active_label.setStyleSheet(
-                "font-weight: bold; color: #a12626;"
-            )
+            self.active_label.setText("No active laser calibration.")
+            self.active_label.setStyleSheet("font-weight: bold; color: #a12626;")
             return
 
         calibration = self.active_calibration
@@ -266,20 +215,14 @@ class LaserCalibrationDialog(QDialog):
             f"{calibration.minimum_power_w:g} to "
             f"{calibration.maximum_power_w:g} W"
         )
-        self.active_label.setStyleSheet(
-            "font-weight: bold; color: #16803a;"
-        )
+        self.active_label.setStyleSheet("font-weight: bold; color: #16803a;")
 
     def _select_levels(
         self,
         selected_levels: set[int],
     ) -> None:
-        for current_percent, checkbox in (
-            self.checkboxes.items()
-        ):
-            checkbox.setChecked(
-                current_percent in selected_levels
-            )
+        for current_percent, checkbox in self.checkboxes.items():
+            checkbox.setChecked(current_percent in selected_levels)
 
     def _restore_previous(self) -> None:
         if self.active_calibration is None:
@@ -293,12 +236,8 @@ class LaserCalibrationDialog(QDialog):
 
         self._select_levels(set(previous_values))
 
-        for current_percent, power_w in (
-            previous_values.items()
-        ):
-            spinbox = self.power_spinboxes.get(
-                current_percent
-            )
+        for current_percent, power_w in previous_values.items():
+            spinbox = self.power_spinboxes.get(current_percent)
             if spinbox is not None:
                 spinbox.setValue(power_w)
 
@@ -307,14 +246,10 @@ class LaserCalibrationDialog(QDialog):
 
         try:
             for current_percent in self.CURRENT_LEVELS:
-                if not self.checkboxes[
-                    current_percent
-                ].isChecked():
+                if not self.checkboxes[current_percent].isChecked():
                     continue
 
-                power_w = self.power_spinboxes[
-                    current_percent
-                ].value()
+                power_w = self.power_spinboxes[current_percent].value()
 
                 selected_points.append(
                     CalibrationPoint(
@@ -323,9 +258,7 @@ class LaserCalibrationDialog(QDialog):
                     )
                 )
 
-            calibration = LaserPowerCalibration.create(
-                selected_points
-            )
+            calibration = LaserPowerCalibration.create(selected_points)
 
         except ValueError as exc:
             QMessageBox.warning(
@@ -345,10 +278,7 @@ class LaserCalibrationDialog(QDialog):
                 "The previous calibration will remain stored only "
                 "for traceability of earlier protocols."
             ),
-            (
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.Cancel
-            ),
+            (QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel),
             QMessageBox.StandardButton.Cancel,
         )
 
@@ -356,11 +286,7 @@ class LaserCalibrationDialog(QDialog):
             return
 
         try:
-            self.saved_calibration = (
-                self.store.save_new(
-                    calibration.points
-                )
-            )
+            self.saved_calibration = self.store.save_new(calibration.points)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(
                 self,

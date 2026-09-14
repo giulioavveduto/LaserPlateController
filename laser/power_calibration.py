@@ -20,24 +20,18 @@ class CalibrationPoint:
             or not 0 <= self.current_percent <= 100
         ):
             raise ValueError(
-                "Calibration current must be an integer "
-                "from 0 to 100%."
+                "Calibration current must be an integer " "from 0 to 100%."
             )
 
         if not math.isfinite(self.power_w):
-            raise ValueError(
-                "Measured power must be finite."
-            )
+            raise ValueError("Measured power must be finite.")
 
         if self.current_percent == 0:
             if self.power_w != 0.0:
-                raise ValueError(
-                    "The 0% calibration point must be 0 W."
-                )
+                raise ValueError("The 0% calibration point must be 0 W.")
         elif self.power_w <= 0.0:
             raise ValueError(
-                "Measured power above 0% current must be "
-                "greater than zero."
+                "Measured power above 0% current must be " "greater than zero."
             )
 
     def to_dict(self) -> dict[str, object]:
@@ -65,32 +59,24 @@ class LaserPowerCalibration:
         )
         object.__setattr__(self, "points", ordered_points)
 
-        if len(ordered_points) < 2:
+        positive_points = tuple(
+            point for point in ordered_points if point.current_percent > 0
+        )
+
+        if len(positive_points) < 2:
             raise ValueError(
-                "At least two calibration points are required."
+                "At least two calibration points above 0% " "are required."
             )
 
-        currents = [
-            point.current_percent
-            for point in ordered_points
-        ]
-        powers = [
-            point.power_w
-            for point in ordered_points
-        ]
+        currents = [point.current_percent for point in ordered_points]
+        powers = [point.power_w for point in ordered_points]
 
         if len(set(currents)) != len(currents):
-            raise ValueError(
-                "Each current percentage may appear only once."
-            )
+            raise ValueError("Each current percentage may appear only once.")
 
-        if any(
-            right <= left
-            for left, right in zip(powers, powers[1:])
-        ):
+        if any(right <= left for left, right in zip(powers, powers[1:])):
             raise ValueError(
-                "Measured power must increase strictly with "
-                "current percentage."
+                "Measured power must increase strictly with " "current percentage."
             )
 
     @classmethod
@@ -98,9 +84,11 @@ class LaserPowerCalibration:
         cls,
         points: Iterable[CalibrationPoint],
     ) -> "LaserPowerCalibration":
-        timestamp = datetime.now(timezone.utc).isoformat(
-            timespec="seconds"
-        ).replace("+00:00", "Z")
+        timestamp = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
 
         return cls(
             calibration_id=uuid.uuid4().hex,
@@ -109,20 +97,26 @@ class LaserPowerCalibration:
         )
 
     @property
+    def interpolation_points(
+        self,
+    ) -> tuple[CalibrationPoint, ...]:
+        return tuple(point for point in self.points if point.current_percent > 0)
+
+    @property
     def minimum_current_percent(self) -> int:
-        return self.points[0].current_percent
+        return self.interpolation_points[0].current_percent
 
     @property
     def maximum_current_percent(self) -> int:
-        return self.points[-1].current_percent
+        return self.interpolation_points[-1].current_percent
 
     @property
     def minimum_power_w(self) -> float:
-        return self.points[0].power_w
+        return self.interpolation_points[0].power_w
 
     @property
     def maximum_power_w(self) -> float:
-        return self.points[-1].power_w
+        return self.interpolation_points[-1].power_w
 
     @staticmethod
     def _interpolate(
@@ -138,19 +132,12 @@ class LaserPowerCalibration:
             x_right = x_values[index + 1]
 
             if x_left <= value <= x_right:
-                fraction = (
-                    (value - x_left)
-                    / (x_right - x_left)
-                )
-                return (
-                    y_values[index]
-                    + fraction
-                    * (y_values[index + 1] - y_values[index])
+                fraction = (value - x_left) / (x_right - x_left)
+                return y_values[index] + fraction * (
+                    y_values[index + 1] - y_values[index]
                 )
 
-        raise ValueError(
-            "The requested value is outside the calibrated range."
-        )
+        raise ValueError("The requested value is outside the calibrated range.")
 
     def power_for_current_percent(
         self,
@@ -175,14 +162,8 @@ class LaserPowerCalibration:
 
         return self._interpolate(
             current_percent,
-            [
-                float(point.current_percent)
-                for point in self.points
-            ],
-            [
-                point.power_w
-                for point in self.points
-            ],
+            [float(point.current_percent) for point in self.interpolation_points],
+            [point.power_w for point in self.interpolation_points],
         )
 
     def current_percent_for_power_w(
@@ -190,18 +171,12 @@ class LaserPowerCalibration:
         power_w: float,
     ) -> float:
         if not math.isfinite(power_w) or power_w < 0.0:
-            raise ValueError(
-                "Requested power must be finite and non-negative."
-            )
+            raise ValueError("Requested power must be finite and non-negative.")
 
         if power_w == 0:
             return 0.0
 
-        if not (
-            self.minimum_power_w
-            <= power_w
-            <= self.maximum_power_w
-        ):
+        if not (self.minimum_power_w <= power_w <= self.maximum_power_w):
             raise ValueError(
                 "Requested power is outside the calibrated range "
                 f"{self.minimum_power_w:g}–"
@@ -210,14 +185,8 @@ class LaserPowerCalibration:
 
         return self._interpolate(
             power_w,
-            [
-                point.power_w
-                for point in self.points
-            ],
-            [
-                float(point.current_percent)
-                for point in self.points
-            ],
+            [point.power_w for point in self.interpolation_points],
+            [float(point.current_percent) for point in self.interpolation_points],
         )
 
     def nearest_current_for_power_w(
@@ -260,10 +229,7 @@ class LaserPowerCalibration:
         return {
             "calibration_id": self.calibration_id,
             "created_at_utc": self.created_at_utc,
-            "points": [
-                point.to_dict()
-                for point in self.points
-            ],
+            "points": [point.to_dict() for point in self.points],
         }
 
     @classmethod
@@ -274,34 +240,24 @@ class LaserPowerCalibration:
         raw_points = data.get("points")
 
         if not isinstance(raw_points, list):
-            raise ValueError(
-                "Calibration points must be stored as a list."
-            )
+            raise ValueError("Calibration points must be stored as a list.")
 
         points: list[CalibrationPoint] = []
 
         for raw_point in raw_points:
             if not isinstance(raw_point, dict):
-                raise ValueError(
-                    "Each calibration point must be an object."
-                )
+                raise ValueError("Each calibration point must be an object.")
 
             points.append(
                 CalibrationPoint(
-                    current_percent=int(
-                        raw_point["current_percent"]
-                    ),
+                    current_percent=int(raw_point["current_percent"]),
                     power_w=float(raw_point["power_w"]),
                 )
             )
 
         return cls(
-            calibration_id=str(
-                data.get("calibration_id", "")
-            ),
-            created_at_utc=str(
-                data.get("created_at_utc", "")
-            ),
+            calibration_id=str(data.get("calibration_id", "")),
+            created_at_utc=str(data.get("created_at_utc", "")),
             points=tuple(points),
         )
 
@@ -333,24 +289,16 @@ class LaserCalibrationStore:
         if not self.database_path.exists():
             return self._empty_database()
 
-        data = json.loads(
-            self.database_path.read_text(encoding="utf-8")
-        )
+        data = json.loads(self.database_path.read_text(encoding="utf-8"))
 
         if not isinstance(data, dict):
-            raise ValueError(
-                "Laser calibration database must contain an object."
-            )
+            raise ValueError("Laser calibration database must contain an object.")
 
         if data.get("format_version") != self.FORMAT_VERSION:
-            raise ValueError(
-                "Unsupported laser calibration database version."
-            )
+            raise ValueError("Unsupported laser calibration database version.")
 
         if not isinstance(data.get("calibrations"), dict):
-            raise ValueError(
-                "Laser calibration history must be an object."
-            )
+            raise ValueError("Laser calibration history must be an object.")
 
         return data
 
@@ -364,13 +312,9 @@ class LaserCalibrationStore:
         raw_calibration = calibrations.get(calibration_id)
 
         if not isinstance(raw_calibration, dict):
-            raise KeyError(
-                f"Unknown laser calibration: {calibration_id}"
-            )
+            raise KeyError(f"Unknown laser calibration: {calibration_id}")
 
-        return LaserPowerCalibration.from_dict(
-            raw_calibration
-        )
+        return LaserPowerCalibration.from_dict(raw_calibration)
 
     def get_active(self) -> LaserPowerCalibration | None:
         database = self._load_database()
@@ -389,21 +333,15 @@ class LaserCalibrationStore:
         database = self._load_database()
         calibrations = database["calibrations"]
 
-        calibrations[calibration.calibration_id] = (
-            calibration.to_dict()
-        )
-        database["active_calibration_id"] = (
-            calibration.calibration_id
-        )
+        calibrations[calibration.calibration_id] = calibration.to_dict()
+        database["active_calibration_id"] = calibration.calibration_id
 
         self.database_path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        temporary_path = self.database_path.with_name(
-            self.database_path.name + ".tmp"
-        )
+        temporary_path = self.database_path.with_name(self.database_path.name + ".tmp")
         temporary_path.write_text(
             json.dumps(database, indent=4),
             encoding="utf-8",

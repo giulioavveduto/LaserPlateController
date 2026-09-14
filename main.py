@@ -46,6 +46,7 @@ from experiment.run_summary_widget import RunSummaryWidget
 from laser.calibration_dialog import LaserCalibrationDialog
 from laser.power_calibration import LaserCalibrationStore
 
+
 class FocusWheelDoubleSpinBox(QDoubleSpinBox):
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self.hasFocus():
@@ -86,6 +87,7 @@ class MainWindow(QMainWindow):
 
         self.calibration_manager = CalibrationManager()
         self.laser_calibration_store = LaserCalibrationStore()
+        self.laser_calibration_dialog: LaserCalibrationDialog | None = None
         self.experiment_protocol = ExperimentProtocol(plate_type="96-well plate")
         self.experiment_runner = ExperimentRunner(self)
         self.current_protocol_path: Path | None = None
@@ -401,9 +403,7 @@ class MainWindow(QMainWindow):
         self.laser_calibration_action.triggered.connect(
             self.open_laser_calibration_dialog
         )
-        settings_menu.addAction(
-            self.laser_calibration_action
-        )
+        settings_menu.addAction(self.laser_calibration_action)
 
         self.developer_indicator = QLabel("")
 
@@ -427,6 +427,14 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.save_as_action)
 
     def open_laser_calibration_dialog(self) -> None:
+        if (
+            self.laser_calibration_dialog is not None
+            and self.laser_calibration_dialog.isVisible()
+        ):
+            self.laser_calibration_dialog.raise_()
+            self.laser_calibration_dialog.activateWindow()
+            return
+
         try:
             dialog = LaserCalibrationDialog(
                 self.laser_calibration_store,
@@ -440,30 +448,41 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        self.laser_calibration_dialog = dialog
+        dialog.finished.connect(self.on_laser_calibration_dialog_finished)
+        dialog.show()
+
+    def on_laser_calibration_dialog_finished(
+        self,
+        result: int,
+    ) -> None:
+        dialog = self.laser_calibration_dialog
+        self.laser_calibration_dialog = None
+
+        if dialog is None:
             return
 
         calibration = dialog.saved_calibration
+        dialog.deleteLater()
 
-        if calibration is None:
+        if result != QDialog.DialogCode.Accepted or calibration is None:
             return
+
+        if hasattr(self, "laser_editor"):
+            self.laser_editor.refresh_calibration()
 
         QMessageBox.information(
             self,
             "Laser calibration saved",
             (
                 "The new laser power calibration is active.\n\n"
-                f"Calibration ID: "
-                f"{calibration.calibration_id}\n"
-                f"Measured points: "
-                f"{len(calibration.points)}\n"
+                f"Calibration ID: {calibration.calibration_id}\n"
+                f"Measured points: {len(calibration.points)}\n"
                 f"Power range: "
                 f"{calibration.minimum_power_w:g}–"
                 f"{calibration.maximum_power_w:g} W"
             ),
         )
-        if hasattr(self, "laser_editor"):
-            self.laser_editor.refresh_calibration()
 
     def on_developer_mode_changed(self, enabled: bool) -> None:
         self.developer_indicator.setText("DEVELOPER MODE" if enabled else "")
@@ -953,9 +972,7 @@ class MainWindow(QMainWindow):
             self.experiment_runner.start(
                 dialog.snapshot,
                 stage_only=dialog.stage_only,
-                resolved_current_percents=(
-                    dialog.resolved_current_percents
-                ),
+                resolved_current_percents=(dialog.resolved_current_percents),
             )
         except (RuntimeError, ValueError) as exc:
             QMessageBox.critical(
@@ -1189,9 +1206,7 @@ class MainWindow(QMainWindow):
         state: ExperimentState,
     ) -> None:
         self.update_experiment_dashboard()
-        self.run_summary_widget.update_from_runner(
-            self.experiment_runner
-        )
+        self.run_summary_widget.update_from_runner(self.experiment_runner)
         self.update_experiment_controls()
 
     def on_experiment_move_requested(self, well_name: str) -> None:

@@ -22,9 +22,7 @@ def make_points() -> list[CalibrationPoint]:
 
 class LaserPowerCalibrationTests(unittest.TestCase):
     def test_piecewise_interpolation_in_both_directions(self) -> None:
-        calibration = LaserPowerCalibration.create(
-            make_points()
-        )
+        calibration = LaserPowerCalibration.create(make_points())
 
         self.assertAlmostEqual(
             calibration.power_for_current_percent(20),
@@ -36,9 +34,7 @@ class LaserPowerCalibrationTests(unittest.TestCase):
         )
 
     def test_zero_represents_emission_off(self) -> None:
-        calibration = LaserPowerCalibration.create(
-            make_points()
-        )
+        calibration = LaserPowerCalibration.create(make_points())
 
         self.assertEqual(
             calibration.power_for_current_percent(0),
@@ -50,9 +46,7 @@ class LaserPowerCalibrationTests(unittest.TestCase):
         )
 
     def test_extrapolation_is_rejected(self) -> None:
-        calibration = LaserPowerCalibration.create(
-            make_points()
-        )
+        calibration = LaserPowerCalibration.create(make_points())
 
         with self.assertRaises(ValueError):
             calibration.power_for_current_percent(5)
@@ -79,10 +73,7 @@ class LaserPowerCalibrationTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            database_path = (
-                Path(directory)
-                / "laser_power_calibrations.json"
-            )
+            database_path = Path(directory) / "laser_power_calibrations.json"
             store = LaserCalibrationStore(database_path)
 
             first = store.save_new(make_points())
@@ -106,22 +97,16 @@ class LaserPowerCalibrationTests(unittest.TestCase):
                 [20, 50, 80],
             )
 
-            historical = store.get_calibration(
-                first.calibration_id
-            )
+            historical = store.get_calibration(first.calibration_id)
             self.assertEqual(
                 [point.current_percent for point in historical.points],
                 [10, 30, 70, 90],
             )
 
     def test_integer_current_is_selected_by_nearest_power(self) -> None:
-        calibration = LaserPowerCalibration.create(
-            make_points()
-        )
+        calibration = LaserPowerCalibration.create(make_points())
 
-        current, achieved_power = (
-            calibration.nearest_current_for_power_w(1.44)
-        )
+        current, achieved_power = calibration.nearest_current_for_power_w(1.44)
 
         self.assertEqual(current, 51)
         self.assertAlmostEqual(
@@ -129,7 +114,8 @@ class LaserPowerCalibrationTests(unittest.TestCase):
             1.43,
             places=6,
         )
-    def test_zero_point_enables_low_range_interpolation(
+
+    def test_zero_point_is_excluded_from_interpolation(
         self,
     ) -> None:
         calibration = LaserPowerCalibration.create(
@@ -140,14 +126,20 @@ class LaserPowerCalibrationTests(unittest.TestCase):
             ]
         )
 
-        self.assertAlmostEqual(
-            calibration.power_for_current_percent(5),
-            0.1,
+        self.assertEqual(
+            calibration.power_for_current_percent(0),
+            0.0,
         )
-        self.assertAlmostEqual(
-            calibration.current_percent_for_power_w(0.1),
-            5.0,
+        self.assertEqual(
+            calibration.current_percent_for_power_w(0),
+            0.0,
         )
+
+        with self.assertRaises(ValueError):
+            calibration.power_for_current_percent(5)
+
+        with self.assertRaises(ValueError):
+            calibration.current_percent_for_power_w(0.1)
 
     def test_zero_percent_requires_zero_power(self) -> None:
         with self.assertRaises(ValueError):
