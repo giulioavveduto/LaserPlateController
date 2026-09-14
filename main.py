@@ -41,7 +41,7 @@ from copy import deepcopy
 from experiment.timing_assignment_widget import TimingAssignmentWidget
 from laser.laser_assignment_widget import LaserAssignmentWidget
 from experiment.start_dialog import StartExperimentDialog
-from experiment.run_report import write_csv_report
+from experiment.excel_report import write_excel_report
 from experiment.run_summary_widget import RunSummaryWidget
 from laser.calibration_dialog import LaserCalibrationDialog
 from laser.power_calibration import LaserCalibrationStore
@@ -82,7 +82,7 @@ class MainWindow(QMainWindow):
         self.laser_emission_enabled = False
         self.laser_current_percent: int | None = None
         self.run_directory = None
-        self.export_csv_requested = False
+        self.export_excel_requested = False
         self.run_report_path: Path | None = None
 
         self.calibration_manager = CalibrationManager()
@@ -319,21 +319,21 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(self.status_tab_index)
 
     def save_run_report(self) -> Path | None:
-        if not self.export_csv_requested or self.run_directory is None:
+        if not self.export_excel_requested or self.run_directory is None:
             return None
 
         if self.run_report_path is not None:
             return self.run_report_path
 
         try:
-            self.run_report_path = write_csv_report(
+            self.run_report_path = write_excel_report(
                 self.run_directory,
                 self.experiment_runner,
             )
         except (OSError, TypeError, ValueError) as exc:
             QMessageBox.warning(
                 self,
-                "Run report could not be saved",
+                "Excel report could not be written",
                 (
                     "The experiment result remains visible, but the CSV "
                     f"report could not be written.\n\n{exc}"
@@ -723,8 +723,8 @@ class MainWindow(QMainWindow):
         self.stage_mode_combo = QComboBox()
         self.stage_mode_combo.addItems(
             [
-                "Simulator",
                 "Real DMSTC",
+                "Simulator",
             ]
         )
         self.stage_mode_combo.setCurrentText("Simulator")
@@ -732,7 +732,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stage_mode_combo)
 
         self.connect_button = QPushButton("Connect stage")
-        self.connect_button.clicked.connect(self.request_connect_stage.emit)
+        self.connect_button.clicked.connect(self.request_stage_connection)
         layout.addWidget(self.connect_button)
 
         self.disconnect_button = QPushButton("Disconnect")
@@ -741,6 +741,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.disconnect_button)
 
         return group
+
+    def request_stage_connection(self) -> None:
+        self.request_stage_mode.emit(self.stage_mode_combo.currentText())
+        self.request_connect_stage.emit()
 
     def request_stage_disconnection(self) -> None:
         if not self.stage_connected:
@@ -999,7 +1003,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.snapshot is None:
             return
         self.run_directory = dialog.run_directory
-        self.export_csv_requested = dialog.export_csv_requested
+        self.export_excel_requested = dialog.export_excel_requested
         self.run_report_path = None
         self._stopped_interrupted_well = None
 

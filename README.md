@@ -30,4 +30,4 @@ Cross-platform Python application for controlling a motorized XY stage and plann
 Create a virtual environment and install:
 
 ```bash
-python -m pip install PySide6 pyserial
+python -m pip install PySide6 pyserial openpyxl

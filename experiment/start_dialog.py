@@ -112,8 +112,12 @@ class StartExperimentDialog(QDialog):
         self.snapshot = None
         self.run_directory = None
         self.stage_only = True
-        self.export_csv_requested = True
+        self.export_excel_requested = True
         self.resolved_current_percents: dict[str, int] = {}
+        self.resolved_laser_setpoints: dict[
+            str,
+            dict[str, object],
+        ] = {}
         self.used_laser_calibrations: dict[str, dict[str, object]] = {}
         self.setWindowTitle("Review experiment before starting")
         self.resize(650, 500)
@@ -161,11 +165,11 @@ class StartExperimentDialog(QDialog):
         self.buttons.button(QDialogButtonBox.StandardButton.Yes).setText(
             "Yes, start test"
         )
-        self.export_csv = QCheckBox(
-            "Create a CSV run summary when the experiment ends."
+        self.export_excel = QCheckBox(
+            "Create a two-sheet Excel report when the experiment ends."
         )
-        self.export_csv.setChecked(True)
-        layout.addWidget(self.export_csv)
+        self.export_excel.setChecked(True)
+        layout.addWidget(self.export_excel)
         self.buttons.accepted.connect(self.confirm_start)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
@@ -236,10 +240,11 @@ class StartExperimentDialog(QDialog):
             return
 
         self.stage_only = bool(self.mode.currentData())
-        self.export_csv_requested = self.export_csv.isChecked()
+        self.export_excel_requested = self.export_excel.isChecked()
         snapshot = deepcopy(self.window.experiment_protocol)
         snapshot.name = self.name.text().strip()
         self.resolved_current_percents = {}
+        self.resolved_laser_setpoints = {}
         self.used_laser_calibrations = {}
         ordering_start_position_mm = None
 
@@ -307,6 +312,17 @@ class StartExperimentDialog(QDialog):
 
                     self.resolved_current_percents[well] = resolved.current_percent
 
+                    self.resolved_laser_setpoints[well] = {
+                        "requested_mode": resolved.requested_mode,
+                        "requested_value": resolved.requested_value,
+                        "calibration_id": resolved.calibration_id,
+                        "current_percent": resolved.current_percent,
+                        "estimated_power_w": resolved.achieved_power_w,
+                        "estimated_irradiance_w_cm2": (
+                            resolved.achieved_irradiance_w_cm2
+                        ),
+                    }
+
                     if resolved.calibration_id is not None:
                         calibration = (
                             self.window.laser_calibration_store.get_calibration(
@@ -340,6 +356,11 @@ class StartExperimentDialog(QDialog):
                 "created_at": stamp.isoformat(),
                 "mode": ("stage_only" if self.stage_only else "automatic_irradiation"),
                 "stage_mode": self.window.stage_mode_combo.currentText(),
+                "laser_mode": (
+                    "Not applicable"
+                    if self.stage_only
+                    else (self.window.laser_control_widget.mode_combo.currentText())
+                ),
                 "a1_mm": self.window.calibration_manager.get_a1(snapshot.plate_type),
                 "irradiation_order": snapshot.irradiation_order,
                 "resolved_well_sequence": list(snapshot.selected_wells),
@@ -356,10 +377,11 @@ class StartExperimentDialog(QDialog):
                         "controller-confirmed emission."
                     )
                 ),
-                "csv_report_requested": self.export_csv_requested,
+                "excel_report_requested": self.export_excel_requested,
                 "resolved_current_percent_by_well": dict(
                     self.resolved_current_percents
                 ),
+                "resolved_laser_setpoints_by_well": dict(self.resolved_laser_setpoints),
                 "laser_calibrations": dict(self.used_laser_calibrations),
             }
             with (directory / "protocol.lpp").open("x", encoding="utf-8") as file:

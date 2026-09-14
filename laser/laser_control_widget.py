@@ -40,8 +40,8 @@ class LaserControlWidget(QGroupBox):
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(
             [
-                LaserMode.SIMULATOR.value,
                 LaserMode.REAL_PHOTONTEC.value,
+                LaserMode.SIMULATOR.value,
             ]
         )
         self.mode_combo.currentTextChanged.connect(self.mode_changed.emit)
