@@ -109,6 +109,33 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.tabs, stretch=1)
         plate_page = QWidget()
         plate_layout = QVBoxLayout(plate_page)
+        order_layout = QHBoxLayout()
+        order_layout.addWidget(QLabel("Irradiation order:"))
+
+        self.irradiation_order_combo = QComboBox()
+        self.irradiation_order_combo.addItem(
+            "Row",
+            "row",
+        )
+        self.irradiation_order_combo.addItem(
+            "Column",
+            "column",
+        )
+        self.irradiation_order_combo.addItem(
+            "Serpentine rows",
+            "serpentine",
+        )
+        self.irradiation_order_combo.addItem(
+            "Optimized for scattered wells",
+            "optimized",
+        )
+        self.irradiation_order_combo.currentIndexChanged.connect(
+            self.on_irradiation_order_changed
+        )
+
+        order_layout.addWidget(self.irradiation_order_combo)
+        order_layout.addStretch()
+        plate_layout.addLayout(order_layout)
         body_layout = QHBoxLayout()
         body_layout.addWidget(self.create_stage_section(), stretch=1)
         body_layout.addWidget(self.create_plate_section(), stretch=2)
@@ -594,6 +621,16 @@ class MainWindow(QMainWindow):
         self.experiment_protocol.name = loaded_protocol.name
         self.experiment_protocol.plate_type = loaded_protocol.plate_type
         self.experiment_protocol.selected_wells = list(loaded_protocol.selected_wells)
+        self.experiment_protocol.irradiation_order = loaded_protocol.irradiation_order
+
+        order_index = self.irradiation_order_combo.findData(
+            loaded_protocol.irradiation_order
+        )
+
+        if order_index >= 0:
+            self.irradiation_order_combo.blockSignals(True)
+            self.irradiation_order_combo.setCurrentIndex(order_index)
+            self.irradiation_order_combo.blockSignals(False)
         self.experiment_protocol.common_exposure_time_s = (
             loaded_protocol.common_exposure_time_s
         )
@@ -1383,6 +1420,23 @@ class MainWindow(QMainWindow):
             return
 
         self.load_plate_widget(plate_name)
+
+    def on_irradiation_order_changed(
+        self,
+        _index: int,
+    ) -> None:
+        order_mode = self.irradiation_order_combo.currentData()
+
+        if order_mode is None:
+            return
+
+        self.experiment_protocol.irradiation_order = str(order_mode)
+
+        self.statusBar().showMessage(
+            "Irradiation order: " f"{self.irradiation_order_combo.currentText()}",
+            5000,
+        )
+        self.update_start_button_state()
 
     def on_well_selection_changed(
         self,

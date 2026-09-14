@@ -34,12 +34,14 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(protocol.is_laser_ready)
         self.assertEqual(protocol.estimated_duration_s, 10.0)
         self.assertEqual(protocol.exposure_time_for("A1"), 5.0)
+        self.assertEqual(protocol.irradiation_order, "row")
 
     def test_v2_per_well_assignments_survive_round_trip(self) -> None:
         protocol = ExperimentProtocol(
             name="V2 protocol",
             plate_type="96-well plate",
             selected_wells=["A1", "A2"],
+            irradiation_order="serpentine",
             common_exposure_time_s=5.0,
             default_laser_setpoint=LaserSetpoint(
                 mode="current_percent",
@@ -58,6 +60,10 @@ class ProtocolTests(unittest.TestCase):
 
         serialized = protocol.to_dict()
         restored = ExperimentProtocol.from_dict(serialized)
+        self.assertEqual(
+            restored.irradiation_order,
+            "serpentine",
+        )
 
         self.assertEqual(serialized["format_version"], 2)
         self.assertTrue(restored.is_valid)
@@ -73,6 +79,20 @@ class ProtocolTests(unittest.TestCase):
             restored.laser_setpoint_for("A2").value,
             55.0,
         )
+
+    def test_unknown_irradiation_order_is_rejected(
+        self,
+    ) -> None:
+        data = ExperimentProtocol(
+            plate_type="96-well plate",
+            selected_wells=["A1"],
+            common_exposure_time_s=5.0,
+        ).to_dict()
+
+        data["irradiation_order"] = "unknown"
+
+        with self.assertRaises(ValueError):
+            ExperimentProtocol.from_dict(data)
 
 
 class RunReportTests(unittest.TestCase):
@@ -111,12 +131,7 @@ class RunReportTests(unittest.TestCase):
             [row["programmed_current_percent"] for row in rows],
             [30, 55, 0],
         )
-        self.assertTrue(
-            all(
-                row["final_laser_off_confirmed"] == "yes"
-                for row in rows
-            )
-        )
+        self.assertTrue(all(row["final_laser_off_confirmed"] == "yes" for row in rows))
 
     def test_csv_report_is_written_with_expected_content(self) -> None:
         runner = self.make_runner()
@@ -153,20 +168,10 @@ class RunReportTests(unittest.TestCase):
 
         rows = build_run_rows(runner)
 
+        self.assertTrue(all(row["execution_mode"] == "stage_only" for row in rows))
+        self.assertTrue(all(row["programmed_current_percent"] == "" for row in rows))
         self.assertTrue(
-            all(row["execution_mode"] == "stage_only" for row in rows)
-        )
-        self.assertTrue(
-            all(
-                row["programmed_current_percent"] == ""
-                for row in rows
-            )
-        )
-        self.assertTrue(
-            all(
-                row["final_laser_off_confirmed"] == "not_applicable"
-                for row in rows
-            )
+            all(row["final_laser_off_confirmed"] == "not_applicable" for row in rows)
         )
 
 

@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
 
 from plates.plate_geometry import PlateGeometry
 from laser.setpoint_conversion import resolve_laser_setpoint
+from experiment.well_ordering import order_wells
+
 
 def launch_problems(window, stage_only: bool) -> list[str]:
     protocol = window.experiment_protocol
@@ -196,7 +198,11 @@ class StartExperimentDialog(QDialog):
             problems.append("Confirm the laser enclosure and safety conditions.")
         protocol = self.window.experiment_protocol
         self.summary.setText(
-            f"{len(protocol.selected_wells)} wells · Stage: {self.window.stage_mode_combo.currentText()}\n"
+            f"{len(protocol.selected_wells)} wells · "
+            f"Stage: "
+            f"{self.window.stage_mode_combo.currentText()}\n"
+            f"Irradiation order: "
+            f"{self.window.irradiation_order_combo.currentText()}\n"
             "Stage-only countdowns are not irradiation measurements."
         )
         self.problems.setPlainText(
@@ -207,10 +213,7 @@ class StartExperimentDialog(QDialog):
         if problems:
             validation_text = "\n".join(problems)
         elif stage_only:
-            validation_text = (
-                "Protocol valid for a stage-only test. "
-                "Start the test?"
-            )
+            validation_text = "Protocol valid for a stage-only test. " "Start the test?"
         else:
             validation_text = (
                 "Protocol valid for automatic irradiation. "
@@ -219,12 +222,8 @@ class StartExperimentDialog(QDialog):
 
         self.problems.setPlainText(validation_text)
 
-        self.buttons.button(
-            QDialogButtonBox.StandardButton.Yes
-        ).setText(
-            "Yes, start stage-only test"
-            if stage_only
-            else "Yes, start experiment"
+        self.buttons.button(QDialogButtonBox.StandardButton.Yes).setText(
+            "Yes, start stage-only test" if stage_only else "Yes, start experiment"
         )
         self.buttons.button(QDialogButtonBox.StandardButton.Yes).setEnabled(
             not problems
@@ -242,20 +241,63 @@ class StartExperimentDialog(QDialog):
         snapshot.name = self.name.text().strip()
         self.resolved_current_percents = {}
         self.used_laser_calibrations = {}
+        ordering_start_position_mm = None
+
+        try:
+            plate = PlateGeometry(snapshot.plate_type)
+            positions_mm = None
+
+            if snapshot.irradiation_order == "optimized":
+                current_x = self.window.current_x_mm
+                current_y = self.window.current_y_mm
+
+                if current_x is None or current_y is None:
+                    raise ValueError("The current stage position is unavailable.")
+
+                ordering_start_position_mm = (
+                    current_x,
+                    current_y,
+                )
+
+                positions_mm = {}
+
+                for well in snapshot.selected_wells:
+                    relative_position = plate.get_relative_position(well)
+                    positions_mm[well] = (
+                        self.window.calibration_manager.get_absolute_well_position(
+                            plate.name,
+                            *relative_position,
+                        )
+                    )
+
+            snapshot.selected_wells = order_wells(
+                snapshot.selected_wells,
+                plate,
+                snapshot.irradiation_order,
+                positions_mm=positions_mm,
+                start_position_mm=(
+                    ordering_start_position_mm
+                    if ordering_start_position_mm is not None
+                    else (0.0, 0.0)
+                ),
+            )
+
+        except (ValueError, RuntimeError, KeyError) as exc:
+            QMessageBox.critical(
+                self,
+                "Irradiation ordering error",
+                ("The experiment was not started.\n\n" f"{exc}"),
+            )
+            return
 
         if not self.stage_only:
             try:
-                plate = PlateGeometry(snapshot.plate_type)
 
                 for well in snapshot.selected_wells:
-                    setpoint = snapshot.laser_setpoint_for(
-                        well
-                    )
+                    setpoint = snapshot.laser_setpoint_for(well)
 
                     if setpoint is None:
-                        raise ValueError(
-                            f"{well}: laser assignment missing."
-                        )
+                        raise ValueError(f"{well}: laser assignment missing.")
 
                     resolved = resolve_laser_setpoint(
                         setpoint,
@@ -263,30 +305,23 @@ class StartExperimentDialog(QDialog):
                         self.window.laser_calibration_store,
                     )
 
-                    self.resolved_current_percents[
-                        well
-                    ] = resolved.current_percent
+                    self.resolved_current_percents[well] = resolved.current_percent
 
                     if resolved.calibration_id is not None:
                         calibration = (
-                            self.window
-                            .laser_calibration_store
-                            .get_calibration(
+                            self.window.laser_calibration_store.get_calibration(
                                 resolved.calibration_id
                             )
                         )
-                        self.used_laser_calibrations[
-                            resolved.calibration_id
-                        ] = calibration.to_dict()
+                        self.used_laser_calibrations[resolved.calibration_id] = (
+                            calibration.to_dict()
+                        )
 
             except (OSError, ValueError, KeyError) as exc:
                 QMessageBox.critical(
                     self,
                     "Laser assignment error",
-                    (
-                        "The experiment was not started.\n\n"
-                        f"{exc}"
-                    ),
+                    ("The experiment was not started.\n\n" f"{exc}"),
                 )
                 return
         stamp = datetime.now().astimezone()
@@ -306,6 +341,13 @@ class StartExperimentDialog(QDialog):
                 "mode": ("stage_only" if self.stage_only else "automatic_irradiation"),
                 "stage_mode": self.window.stage_mode_combo.currentText(),
                 "a1_mm": self.window.calibration_manager.get_a1(snapshot.plate_type),
+                "irradiation_order": snapshot.irradiation_order,
+                "resolved_well_sequence": list(snapshot.selected_wells),
+                "ordering_start_position_mm": (
+                    None
+                    if ordering_start_position_mm is None
+                    else list(ordering_start_position_mm)
+                ),
                 "note": (
                     "No irradiation; stage movements and countdowns only."
                     if self.stage_only
@@ -318,9 +360,7 @@ class StartExperimentDialog(QDialog):
                 "resolved_current_percent_by_well": dict(
                     self.resolved_current_percents
                 ),
-                "laser_calibrations": dict(
-                    self.used_laser_calibrations
-                ),
+                "laser_calibrations": dict(self.used_laser_calibrations),
             }
             with (directory / "protocol.lpp").open("x", encoding="utf-8") as file:
                 json.dump(data, file, indent=4, allow_nan=False)

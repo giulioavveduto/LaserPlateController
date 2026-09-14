@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from experiment.well_ordering import (
+    SUPPORTED_WELL_ORDERS,
+)
 
 
 @dataclass
@@ -95,6 +98,7 @@ class ExperimentProtocol:
     name: str = "Untitled protocol"
     plate_type: str = ""
     selected_wells: list[str] = field(default_factory=list)
+    irradiation_order: str = "row"
 
     common_exposure_time_s: float = 0.0
     default_laser_setpoint: LaserSetpoint | None = None
@@ -134,6 +138,7 @@ class ExperimentProtocol:
     def is_valid(self) -> bool:
         return (
             bool(self.plate_type)
+            and self.irradiation_order in SUPPORTED_WELL_ORDERS
             and self.selected_well_count > 0
             and all(
                 self.exposure_time_for(well_name) > 0
@@ -203,6 +208,7 @@ class ExperimentProtocol:
             "name": self.name,
             "plate_type": self.plate_type,
             "selected_wells": list(self.selected_wells),
+            "irradiation_order": self.irradiation_order,
             "common_exposure_time_s": self.common_exposure_time_s,
             "default_laser_setpoint": (
                 None
@@ -248,6 +254,7 @@ class ExperimentProtocol:
             name=str(data.get("name", "Untitled protocol")),
             plate_type=str(data.get("plate_type", "")),
             selected_wells=[str(well) for well in data.get("selected_wells", [])],
+            irradiation_order=str(data.get("irradiation_order", "row")),
             common_exposure_time_s=float(data.get("common_exposure_time_s", 0.0)),
             default_laser_setpoint=(
                 None
@@ -260,6 +267,11 @@ class ExperimentProtocol:
                 if isinstance(treatment, dict)
             },
         )
+
+        if protocol.irradiation_order not in SUPPORTED_WELL_ORDERS:
+            raise ValueError(
+                "Unsupported irradiation order: " f"{protocol.irradiation_order}"
+            )
 
         protocol.remove_unselected_treatments()
         return protocol
